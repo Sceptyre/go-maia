@@ -1,6 +1,6 @@
 # maia
 
-AI-powered code change planning and execution assistant.
+An AI-powered CLI that plans and executes code changes. Describe what you want, and maia researches your codebase, creates a phased implementation plan, and executes it.
 
 ## Install
 
