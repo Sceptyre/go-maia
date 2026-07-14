@@ -1,6 +1,6 @@
 package main
 
-import "github.com/oblongata/maia/cmd"
+import "github.com/sceptyre/maia/cmd"
 
 func main() {
 	cmd.Execute()

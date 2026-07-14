@@ -1,4 +1,4 @@
-module github.com/oblongata/maia
+module github.com/sceptyre/maia
 
 go 1.26.5
 

@@ -1,14 +1,14 @@
 package cmd
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/oblongata/maia/internal/state"
+	"github.com/sceptyre/maia/internal/llm"
+	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -21,9 +21,12 @@ var (
 var applyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Execute planned changes",
-	Long: `Apply the planned changes phase by phase.
-Without flags, executes the next pending phase.
-With --phase N, executes a specific phase.`,
+	Long: `Execute the implementation plan phase by phase.
+
+The orchestrator parses each phase from the plan and tasks an implementation agent.
+
+Use --phase N to execute only a specific phase.
+Use --dry-run to preview without making changes.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Verify we're in a maia worktree
 		if !state.HasWorktree() {
@@ -42,7 +45,7 @@ With --phase N, executes a specific phase.`,
 		}
 
 		// Read plan.md
-		plan, err := readPlan()
+		planMD, err := os.ReadFile(filepath.Join(state.GetGeneratedDir(), "plan.md"))
 		if err != nil {
 			return fmt.Errorf("failed to read plan: %w", err)
 		}
@@ -50,175 +53,152 @@ With --phase N, executes a specific phase.`,
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println("  MAIA APPLY - Executing Implementation Plan")
 		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Printf("\nPhases: %d\n", len(plan.Phases))
 		fmt.Println(strings.Repeat("─", 60))
 
 		// Update status
 		state.SetStatus("applying")
 
-		// Determine which phase to execute
-		var phasesToExecute []Phase
-		if phase > 0 {
-			for _, p := range plan.Phases {
-				if p.Order == phase {
-					phasesToExecute = append(phasesToExecute, p)
-					break
-				}
-			}
-			if len(phasesToExecute) == 0 {
-				return fmt.Errorf("phase %d not found", phase)
-			}
-		} else {
-			phasesToExecute = plan.Phases
+		// Initialize LLM client
+		client := llm.NewClient()
+		if client.APIKey == "" {
+			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")
 		}
 
-		// Execute phases
-		for _, p := range phasesToExecute {
-			if err := executePhase(p, dryRun, force); err != nil {
-				state.SetStatus("error")
-				return fmt.Errorf("phase %d failed: %w", p.Order, err)
-			}
+		cwd, _ := os.Getwd()
+
+		// Run orchestrator
+		fmt.Println("\n▶ Starting implementation orchestrator...\n")
+
+		result, err := runApplyOrchestrator(client, string(planMD), cwd, phase, dryRun, force)
+		if err != nil {
+			state.SetStatus("error")
+			return fmt.Errorf("implementation failed: %w", err)
 		}
 
 		// Update status
 		state.SetStatus("applied")
 
 		fmt.Println(strings.Repeat("─", 60))
-		fmt.Println("\n✓ All phases executed successfully!")
+		fmt.Println("\n✓ Implementation complete!")
+		fmt.Printf("\n%s\n", result)
 		fmt.Println("\nNext steps:")
-		fmt.Println("  - Review changes: git diff")
-		fmt.Println("  - Commit: git add . && git commit")
-		fmt.Println("  - Merge back: maia merge")
+		fmt.Println("  Review: git diff")
+		fmt.Println("  Commit: git add . && git commit")
+		fmt.Println("  Merge:  maia merge")
 
 		return nil
 	},
 }
 
-func readPlan() (*Plan, error) {
-	data, err := os.ReadFile(filepath.Join(state.GetGeneratedDir(), "plan.md"))
-	if err != nil {
-		return nil, err
-	}
+func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targetPhase int, dryRun, force bool) (string, error) {
+	systemPrompt := `You execute implementation plans by delegating to an implementation agent.
 
-	// Simple markdown parser for plan
-	plan := &Plan{}
-	content := string(data)
-	lines := strings.Split(content, "\n")
+Parse the plan to extract phases and their artifacts.
+For each artifact in each phase, create a specific implementation task.
 
-	var currentPhase *Phase
-	inTable := false
+Task format: "do [specific action] with the intent to [goal]"
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+Rules:
+- Execute phases in order
+- For each artifact: task the agent to create/modify that file
+- Include the code samples from the plan in the task
+- Do not research or explore - just execute
+- If targetPhase is set, only execute that phase`
 
-		// Parse phase headers
-		if strings.HasPrefix(line, "## Phase ") {
-			if currentPhase != nil {
-				plan.Phases = append(plan.Phases, *currentPhase)
+	userPrompt := fmt.Sprintf(`## Implementation Plan
+
+%s
+
+---
+
+Execute this plan.
+
+Target phase: %s
+Dry run: %v
+Force: %v
+
+For each phase:
+1. Extract the artifacts (files to create/modify)
+2. For each artifact, create a task: "do write [filepath] with the intent to [description from plan], using this code: [code sample from plan]"
+3. Execute each task with the implementation agent
+
+Start executing phase by phase.`, planContent,
+		func() string {
+			if targetPhase > 0 {
+				return fmt.Sprintf("Phase %d only", targetPhase)
 			}
-			currentPhase = &Phase{}
-			// Extract phase number and name
-			parts := strings.SplitN(strings.TrimPrefix(line, "## Phase "), ": ", 2)
-			if len(parts) == 2 {
-				fmt.Sscanf(parts[0], "%d", &currentPhase.Order)
-				currentPhase.Name = parts[1]
+			return "All phases"
+		}(),
+		dryRun, force)
+
+	// Create implementation agent
+	implementationTools := llm.FileTools
+	implementationAgent := llm.NewAgent(
+		"implementer",
+		`You implement code changes. Read files to understand context, then write/modify files as instructed.
+
+Rules:
+- Follow instructions exactly
+- Match existing code style
+- Report what you did`,
+		implementationTools,
+		func(call llm.ToolCall) (string, error) {
+			fmt.Printf("    [impl] 🔧 %s", call.Function.Name)
+			var args map[string]string
+			json.Unmarshal([]byte(call.Function.Arguments), &args)
+			if path, ok := args["path"]; ok && path != "" {
+				fmt.Printf(" %s", path)
 			}
-			inTable = false
-			continue
-		}
+			fmt.Println()
 
-		// Parse table rows
-		if currentPhase != nil && strings.HasPrefix(line, "| `") {
-			parts := strings.Split(line, "|")
-			if len(parts) >= 4 {
-				art := Artifact{
-					Path:        strings.Trim(parts[1], " `"),
-					Action:      strings.TrimSpace(parts[2]),
-					Description: strings.TrimSpace(parts[3]),
-				}
-				currentPhase.Artifacts = append(currentPhase.Artifacts, art)
+			if dryRun && call.Function.Name == "write_file" {
+				return "Dry run - file not written", nil
 			}
+
+			return llm.HandleToolCall(call, workDir)
+		},
+	)
+
+	// Task handler that delegates to implementation agent
+	taskHandler := func(call llm.ToolCall) (string, error) {
+		var args struct {
+			Agent string `json:"agent"`
+			Task  string `json:"task"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("failed to parse task: %w", err)
 		}
 
-		// Detect table header
-		if strings.HasPrefix(line, "| Artifact") {
-			inTable = true
-			continue
+		fmt.Printf("\n  📋 %s\n", truncateString(args.Task, 150))
+
+		result, err := implementationAgent.Run(args.Task)
+		if err != nil {
+			return "", err
 		}
-		if inTable && strings.HasPrefix(line, "|--") {
-			continue
-		}
+
+		return result, nil
 	}
 
-	// Add last phase
-	if currentPhase != nil {
-		plan.Phases = append(plan.Phases, *currentPhase)
+	taskTool := llm.TaskTool(nil, nil)
+
+	messages := []llm.Message{
+		llm.NewMessage("system", systemPrompt),
+		llm.NewMessage("user", userPrompt),
 	}
 
-	return plan, nil
+	return client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
 }
 
-func executePhase(phase Phase, dryRun, force bool) error {
-	fmt.Printf("\n▶ Phase %d: %s\n", phase.Order, phase.Name)
-	fmt.Printf("  %s\n", phase.Description)
-	fmt.Println(strings.Repeat("─", 40))
-
-	for _, artifact := range phase.Artifacts {
-		if err := executeArtifact(artifact, dryRun, force); err != nil {
-			return err
-		}
+func truncateString(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-
-	fmt.Printf("\n✓ Phase %d complete\n", phase.Order)
-	return nil
-}
-
-func executeArtifact(artifact Artifact, dryRun, force bool) error {
-	fmt.Printf("\n  [%s] %s\n", strings.ToUpper(artifact.Action), artifact.Path)
-	fmt.Printf("  %s\n", artifact.Description)
-
-	if dryRun {
-		fmt.Println("  (dry run - skipping)")
-		return nil
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(artifact.Path); os.IsNotExist(err) {
-		if artifact.Action == "modify" {
-			fmt.Printf("  ⚠ File does not exist, will create\n")
-		}
-	} else if artifact.Action == "create" && !force {
-		fmt.Printf("  ⚠ File already exists\n")
-		if !promptContinue("  Overwrite?") {
-			fmt.Println("  (skipped)")
-			return nil
-		}
-	}
-
-	fmt.Println("  ℹ Implementation required - use 'maia apply' with AI agents to execute")
-	return nil
-}
-
-func promptContinue(message string) bool {
-	fmt.Print(message + " [y/N] ")
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	response := strings.ToLower(scanner.Text())
-	return response == "y" || response == "yes"
-}
-
-func runGit(args ...string) error {
-	cmd := exec.Command("git", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Println(string(out))
-	}
-	return err
+	return s[:max] + "..."
 }
 
 func init() {
 	applyCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Preview changes without applying")
 	applyCmd.Flags().IntVarP(&phase, "phase", "p", 0, "Execute specific phase (0 = all)")
-	applyCmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing files without prompting")
+	applyCmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompts")
 	rootCmd.AddCommand(applyCmd)
 }

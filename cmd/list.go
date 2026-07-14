@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/oblongata/maia/internal/state"
+	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
 

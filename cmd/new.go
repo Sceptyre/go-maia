@@ -6,10 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/oblongata/maia/internal/git"
-	"github.com/oblongata/maia/internal/state"
+	"github.com/sceptyre/maia/internal/git"
+	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -71,41 +70,9 @@ var newCmd = &cobra.Command{
 name: %s
 description: %s
 status: new
-created: %s
 ---
 
-# %s
-
-## Goal
-<!-- What are you trying to accomplish? -->
-
-
-
-## Requirements
-<!-- List specific requirements -->
-- 
-
-
-## Files to Modify
-<!-- Which files need to change? -->
-- [ ] 
-
-
-## Constraints
-<!-- What should NOT change? What patterns must be followed? -->
-- 
-
-
-## Research
-<!-- Where should maia look for context? -->
-- 
-
-
-## Notes
-<!-- Any additional context, links, or decisions -->
-- 
-
-`, slug, description, time.Now().Format(time.RFC3339), description)
+`, slug, description)
 
 		if err := os.WriteFile(filepath.Join(maiaDir, "change.md"), []byte(changeMD), 0644); err != nil {
 			return fmt.Errorf("failed to create change.md: %w", err)
@@ -114,7 +81,7 @@ created: %s
 		fmt.Printf("\n✓ Change request created\n")
 		fmt.Printf("\nNext steps:\n")
 		fmt.Printf("  cd %s\n", worktreePath)
-		fmt.Printf("  # Edit .maia/change.md with your goals and requirements\n")
+		fmt.Printf("  # Write your goal in .maia/change.md\n")
 		fmt.Printf("  maia init\n")
 		return nil
 	},

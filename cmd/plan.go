@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/oblongata/maia/internal/state"
+	"github.com/sceptyre/maia/internal/llm"
+	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -43,27 +45,136 @@ Output is saved to .maia/.generated/plan.md.`,
 			return fmt.Errorf("failed to read research.md: %w", err)
 		}
 
-		// Parse change info
-		reqs := parseChangeRequirements(string(changeMD))
+		// Clean the markdown
+		changeContent := cleanMarkdown(string(changeMD))
 
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println("  MAIA PLAN - Implementation Plan Generation")
 		fmt.Println("═══════════════════════════════════════════════════════════════")
-		fmt.Printf("\nChange Request: %s\n", reqs.Description)
 		fmt.Println(strings.Repeat("─", 60))
 
-		// Analyze inputs
-		fmt.Println("\n▶ Analyzing inputs...")
-		fmt.Printf("  ✓ Goals parsed from change.md\n")
-		fmt.Printf("  ✓ Research loaded from research.md (%d bytes)\n", len(researchMD))
+		// Initialize LLM client
+		client := llm.NewClient()
+		if client.APIKey == "" {
+			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")
+		}
 
-		// Synthesize plan
-		fmt.Println("\n▶ Synthesizing implementation plan...")
-		plan := synthesizePlan(reqs, string(researchMD))
+		cwd, _ := os.Getwd()
 
-		// Generate plan.md
-		fmt.Println("\n▶ Generating plan document...")
-		if err := writePlanMarkdown(plan, reqs); err != nil {
+		// Build the system prompt
+		systemPrompt := `You are an expert software engineer creating a detailed implementation plan.
+
+Your task is to create a comprehensive, step-by-step plan for implementing a code change.
+
+You have access to tools to read files so you can examine specific code before planning changes.
+
+When creating the plan:
+1. Break the work into logical phases
+2. For each phase, list the exact files to create/modify
+3. Provide code samples showing what changes to make
+4. Consider dependencies between phases
+5. Estimate risk level
+
+Be specific and actionable. Include actual code samples where helpful.`
+
+		userPrompt := fmt.Sprintf(`## Original Request
+
+%s
+
+## Research
+
+%s
+
+---
+
+Based on this research, create a detailed implementation plan.
+
+The plan should include:
+1. Multiple phases (logical groupings of work)
+2. For each phase:
+   - Clear description of what this phase accomplishes
+   - Table of artifacts (files to create/modify) with action and description
+   - Code samples showing specific changes (use before/after where helpful)
+3. Dependencies between phases
+4. Risk assessment
+
+Produce a comprehensive implementation plan.`, changeContent, string(researchMD))
+
+		fmt.Println("\n▶ Generating implementation plan...")
+		fmt.Printf("  Model: %s\n\n", client.Model)
+
+		// Create tool handler
+		toolHandler := func(call llm.ToolCall) (string, error) {
+			fmt.Printf("  🔧 %s", call.Function.Name)
+			var args map[string]string
+			json.Unmarshal([]byte(call.Function.Arguments), &args)
+			if path, ok := args["path"]; ok && path != "" {
+				fmt.Printf(" %s", path)
+			}
+			fmt.Println()
+			return llm.HandleToolCall(call, cwd)
+		}
+
+		// Run the AI planning
+		messages := []llm.Message{
+			llm.NewMessage("system", systemPrompt),
+			llm.NewMessage("user", userPrompt),
+		}
+
+		planning, err := client.GetResponseWithTools(messages, llm.FileTools, toolHandler)
+		if err != nil {
+			return fmt.Errorf("AI planning failed: %w", err)
+		}
+
+		// Follow-up: reformat into specific structure
+		fmt.Println("\n▶ Formatting implementation plan...")
+
+		bq := "`" // backtick
+		reformatPrompt := "Now reformat your plan into this exact markdown structure. " +
+			"Include all details but organize them into these sections:\n\n" +
+			bq + "```\n" +
+			"---\n" +
+			"name: <id from change.md>\n" +
+			"description: <description>\n" +
+			"status: planned\n" +
+			"risk: <low|medium|high>\n" +
+			"phases: <number>\n" +
+			"---\n\n" +
+			"# Plan: <description>\n\n" +
+			"<summary of what this plan accomplishes>\n\n" +
+			"## Phase 1: <name>\n\n" +
+			"<description>\n\n" +
+			"| Artifact | Action | Description |\n" +
+			"|----------|--------|-------------|\n" +
+			"| " + bq + "path/to/file.go" + bq + " | create | <what this file does> |\n" +
+			"| " + bq + "path/to/other.go" + bq + " | modify | <what changes> |\n\n" +
+			"### " + bq + "path/to/file.go" + bq + "\n\n" +
+			"**<what this change does>**\n\n" +
+			bq + "```\n" +
+			"go\n" +
+			"<code sample>\n" +
+			bq + "```\n\n" +
+			"<repeat for each phase>\n" +
+			bq + "```\n\n" +
+			"Reformat your complete plan now:"
+
+		messages = append(messages,
+			llm.NewMessage("assistant", planning),
+			llm.NewMessage("user", reformatPrompt),
+		)
+
+		response, err := client.GetResponse(messages)
+		if err != nil {
+			return fmt.Errorf("AI reformat failed: %w", err)
+		}
+
+		fmt.Println("\n▶ Writing plan document...")
+
+		// Extract just the markdown
+		planMD := extractMarkdown(response)
+
+		// Write plan.md
+		if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "plan.md"), []byte(planMD), 0644); err != nil {
 			return fmt.Errorf("failed to write plan: %w", err)
 		}
 
@@ -72,231 +183,13 @@ Output is saved to .maia/.generated/plan.md.`,
 			return err
 		}
 
-		// Summary
 		fmt.Println(strings.Repeat("─", 60))
 		fmt.Println("\n✓ Plan generated!")
-		fmt.Printf("\n  Phases: %d\n", len(plan.Phases))
-		fmt.Printf("  Artifacts: %d\n", countArtifacts(plan))
-		fmt.Printf("  Risk: %s\n", plan.RiskLevel)
 		fmt.Printf("\nOutput: .maia/.generated/plan.md\n")
 		fmt.Println("\nReview the plan, then run: maia apply")
 
 		return nil
 	},
-}
-
-type Plan struct {
-	Phases    []Phase
-	RiskLevel string
-	Summary   string
-}
-
-type Phase struct {
-	Order       int
-	Name        string
-	Description string
-	Artifacts   []Artifact
-	DependsOn   []int
-}
-
-type Artifact struct {
-	Path        string
-	Action      string
-	Description string
-}
-
-func synthesizePlan(reqs *Requirements, research string) Plan {
-	plan := Plan{
-		RiskLevel: assessRisk(reqs),
-		Summary:   generateSummary(reqs),
-	}
-
-	// Phase 1: Foundation
-	phase1 := Phase{
-		Order:       1,
-		Name:        "Foundation",
-		Description: "Set up the basic structure, interfaces, and types needed for this change.",
-		Artifacts:   []Artifact{},
-	}
-
-	for _, file := range reqs.Files {
-		if file != "" {
-			phase1.Artifacts = append(phase1.Artifacts, Artifact{
-				Path:        file,
-				Action:      "create",
-				Description: fmt.Sprintf("Create %s with core interfaces", filepath.Base(file)),
-			})
-		}
-	}
-
-	if len(phase1.Artifacts) == 0 {
-		phase1.Artifacts = append(phase1.Artifacts, Artifact{
-			Path:        "(determined during implementation)",
-			Action:      "create",
-			Description: "Core types and interfaces",
-		})
-	}
-
-	plan.Phases = append(plan.Phases, phase1)
-
-	// Phase 2: Core Implementation
-	phase2 := Phase{
-		Order:       2,
-		Name:        "Core Implementation",
-		Description: "Implement the main functionality according to requirements.",
-		DependsOn:   []int{1},
-		Artifacts:   []Artifact{},
-	}
-
-	for i, req := range reqs.Requirements {
-		if req != "" {
-			phase2.Artifacts = append(phase2.Artifacts, Artifact{
-				Path:        fmt.Sprintf("(implementation %d)", i+1),
-				Action:      "modify",
-				Description: req,
-			})
-		}
-	}
-
-	if len(phase2.Artifacts) == 0 {
-		phase2.Artifacts = append(phase2.Artifacts, Artifact{
-			Path:        "(implementation files)",
-			Action:      "modify",
-			Description: "Implement core functionality",
-		})
-	}
-
-	plan.Phases = append(plan.Phases, phase2)
-
-	// Phase 3: Integration
-	phase3 := Phase{
-		Order:       3,
-		Name:        "Integration",
-		Description: "Wire up the new code with existing systems.",
-		DependsOn:   []int{2},
-		Artifacts: []Artifact{
-			{
-				Path:        "(integration points)",
-				Action:      "modify",
-				Description: "Connect with existing codebase",
-			},
-		},
-	}
-	plan.Phases = append(plan.Phases, phase3)
-
-	// Phase 4: Testing & Verification
-	phase4 := Phase{
-		Order:       4,
-		Name:        "Testing & Verification",
-		Description: "Add tests and verify the implementation works correctly.",
-		DependsOn:   []int{3},
-		Artifacts: []Artifact{
-			{
-				Path:        "*_test.go",
-				Action:      "create",
-				Description: "Unit tests for new functionality",
-			},
-		},
-	}
-	plan.Phases = append(plan.Phases, phase4)
-
-	return plan
-}
-
-func assessRisk(reqs *Requirements) string {
-	fileCount := len(reqs.Files)
-	reqCount := len(reqs.Requirements)
-
-	if fileCount > 5 || reqCount > 5 {
-		return "high"
-	}
-	if fileCount > 2 || reqCount > 2 {
-		return "medium"
-	}
-	return "low"
-}
-
-func generateSummary(reqs *Requirements) string {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("This plan implements: %s\n\n", reqs.Goal))
-
-	if len(reqs.Requirements) > 0 {
-		sb.WriteString("**Key requirements:**\n")
-		for _, req := range reqs.Requirements {
-			if req != "" {
-				sb.WriteString(fmt.Sprintf("- %s\n", req))
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(reqs.Constraints) > 0 {
-		sb.WriteString("**Constraints:**\n")
-		for _, c := range reqs.Constraints {
-			if c != "" {
-				sb.WriteString(fmt.Sprintf("- %s\n", c))
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("The plan is organized into phases to minimize risk and allow incremental verification.")
-
-	return sb.String()
-}
-
-func writePlanMarkdown(plan Plan, reqs *Requirements) error {
-	var sb strings.Builder
-
-	// Frontmatter
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("name: %s\n", reqs.ID))
-	sb.WriteString(fmt.Sprintf("description: %s\n", reqs.Description))
-	sb.WriteString(fmt.Sprintf("status: planned\n"))
-	sb.WriteString(fmt.Sprintf("risk: %s\n", plan.RiskLevel))
-	sb.WriteString(fmt.Sprintf("phases: %d\n", len(plan.Phases)))
-	sb.WriteString("---\n\n")
-
-	// Header
-	sb.WriteString(fmt.Sprintf("# Plan: %s\n\n", reqs.Description))
-	sb.WriteString(fmt.Sprintf("%s\n\n", plan.Summary))
-
-	// Phases
-	for _, phase := range plan.Phases {
-		sb.WriteString(fmt.Sprintf("## Phase %d: %s\n\n", phase.Order, phase.Name))
-		sb.WriteString(fmt.Sprintf("%s\n\n", phase.Description))
-
-		if len(phase.DependsOn) > 0 {
-			sb.WriteString(fmt.Sprintf("**Depends on:** Phase %s\n\n", formatInts(phase.DependsOn)))
-		}
-
-		// Artifacts table
-		sb.WriteString("| Artifact | Action | Description |\n")
-		sb.WriteString("|----------|--------|-------------|\n")
-		for _, art := range phase.Artifacts {
-			sb.WriteString(fmt.Sprintf("| `%s` | %s | %s |\n", art.Path, art.Action, art.Description))
-		}
-		sb.WriteString("\n")
-	}
-
-	return os.WriteFile(filepath.Join(state.GetGeneratedDir(), "plan.md"), []byte(sb.String()), 0644)
-}
-
-func formatInts(ints []int) string {
-	parts := make([]string, len(ints))
-	for i, n := range ints {
-		parts[i] = fmt.Sprintf("%d", n)
-	}
-	return strings.Join(parts, ", ")
-}
-
-func countArtifacts(plan Plan) int {
-	count := 0
-	for _, phase := range plan.Phases {
-		count += len(phase.Artifacts)
-	}
-	return count
 }
 
 func init() {
