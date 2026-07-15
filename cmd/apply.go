@@ -23,7 +23,7 @@ var applyCmd = &cobra.Command{
 	Short: "Execute planned changes",
 	Long: `Execute the implementation plan phase by phase.
 
-The orchestrator parses each phase from the plan and tasks an implementation agent.
+The orchestrator parses each phase and tasks an implementation agent for each artifact.
 
 Use --phase N to execute only a specific phase.
 Use --dry-run to preview without making changes.`,
@@ -67,9 +67,9 @@ Use --dry-run to preview without making changes.`,
 		cwd, _ := os.Getwd()
 
 		// Run orchestrator
-		fmt.Println("\n▶ Starting implementation orchestrator...\n")
+		fmt.Println("\n▶ Starting implementation...\n")
 
-		result, err := runApplyOrchestrator(client, string(planMD), cwd, phase, dryRun, force)
+		result, err := runApplyOrchestrator(client, string(planMD), cwd, phase, dryRun)
 		if err != nil {
 			state.SetStatus("error")
 			return fmt.Errorf("implementation failed: %w", err)
@@ -90,58 +90,70 @@ Use --dry-run to preview without making changes.`,
 	},
 }
 
-func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targetPhase int, dryRun, force bool) (string, error) {
-	systemPrompt := `You execute implementation plans by delegating to an implementation agent.
+func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targetPhase int, dryRun bool) (string, error) {
+	systemPrompt := "You are an implementation orchestrator.\n\n" +
+		"You receive an implementation plan with phases. Read it and task the agent to implement each phase.\n\n" +
+		"TASK FORMAT:\n" +
+		"implement phase <number>: <phase name> with the intent to <goal> using the following plan:\n" +
+		"<detailed list of artifacts, behavior, and code samples>\n\n" +
+		"Each task must be VERBOSE and EXPLICIT:\n" +
+		"- Include ALL artifacts from the phase\n" +
+		"- For each artifact: file path, action (create/modify), what it does\n" +
+		"- Include the COMPLETE code sample from the plan\n" +
+		"- Include any dependencies or ordering between artifacts\n" +
+		"- Include expected behavior and outcomes\n\n" +
+		"EXAMPLE of a complete task:\n" +
+		"implement phase 1: add auth with the intent to set up authentication infrastructure using the following plan:\n" +
+		"\n" +
+		"Artifact 1: pkg/auth/handler.go (create)\n" +
+		"Purpose: HTTP handlers for authentication endpoints\n" +
+		"Behavior:\n" +
+		"- Handler struct holds userStore and tokenService dependencies\n" +
+		"- Login method accepts JSON with username and password\n" +
+		"- Validates credentials against user store\n" +
+		"- Returns JWT token on success, 401 on failure\n" +
+		"Code:\n" +
+		"package auth\n\ntype Handler struct { ... }\n\nfunc (h *Handler) Login(w, r) { ... }\n\n" +
+		"Artifact 2: pkg/auth/middleware.go (create)\n" +
+		"Purpose: JWT authentication middleware for protected routes\n" +
+		"Behavior:\n" +
+		"- Extracts token from Authorization header\n" +
+		"- Validates token signature and expiry\n" +
+		"- Adds user to request context\n" +
+		"- Returns 401 if invalid\n" +
+		"Code:\n" +
+		"package auth\n\nfunc AuthMiddleware(next) { ... }\n\n" +
+		"Rules:\n" +
+		"- Read each phase in the plan\n" +
+		"- For EACH phase, generate ONE verbose task\n" +
+		"- Include ALL artifacts with full details\n" +
+		"- Include COMPLETE code samples from plan\n" +
+		"- Execute phases in order\n" +
+		"- NEVER ask to read files"
 
-Parse the plan to extract phases and their artifacts.
-For each artifact in each phase, create a specific implementation task.
+	phaseDesc := "All phases"
+	if targetPhase > 0 {
+		phaseDesc = fmt.Sprintf("Phase %d only", targetPhase)
+	}
 
-Task format: "do [specific action] with the intent to [goal]"
+	userPrompt := "## Implementation Plan\n\n" + planContent + "\n\n---\n\n" +
+		"Execute this plan.\n\n" +
+		"Target: " + phaseDesc + "\n\n" +
+		"For each Phase:\n" +
+		"1. Find the Artifact table\n" +
+		"2. For EACH artifact row, create a task using EXACTLY this format:\n" +
+		"   do write [filepath] with the intent to [description], using this code: [code from plan]\n" +
+		"3. Wait for completion, then next artifact\n\n" +
+		"Start Phase 1 now."
 
-Rules:
-- Execute phases in order
-- For each artifact: task the agent to create/modify that file
-- Include the code samples from the plan in the task
-- Do not research or explore - just execute
-- If targetPhase is set, only execute that phase`
-
-	userPrompt := fmt.Sprintf(`## Implementation Plan
-
-%s
-
----
-
-Execute this plan.
-
-Target phase: %s
-Dry run: %v
-Force: %v
-
-For each phase:
-1. Extract the artifacts (files to create/modify)
-2. For each artifact, create a task: "do write [filepath] with the intent to [description from plan], using this code: [code sample from plan]"
-3. Execute each task with the implementation agent
-
-Start executing phase by phase.`, planContent,
-		func() string {
-			if targetPhase > 0 {
-				return fmt.Sprintf("Phase %d only", targetPhase)
-			}
-			return "All phases"
-		}(),
-		dryRun, force)
-
-	// Create implementation agent
-	implementationTools := llm.FileTools
+	// Implementation agent - only writes files
 	implementationAgent := llm.NewAgent(
 		"implementer",
-		`You implement code changes. Read files to understand context, then write/modify files as instructed.
-
-Rules:
-- Follow instructions exactly
-- Match existing code style
-- Report what you did`,
-		implementationTools,
+		"You implement code by writing files.\n"+
+			"When given a task with code, write that code to the specified file.\n"+
+			"Do not read files first - use the code provided in the task.\n"+
+			"Report what file you wrote.",
+		llm.FileTools,
 		func(call llm.ToolCall) (string, error) {
 			fmt.Printf("    [impl] 🔧 %s", call.Function.Name)
 			var args map[string]string
@@ -152,7 +164,7 @@ Rules:
 			fmt.Println()
 
 			if dryRun && call.Function.Name == "write_file" {
-				return "Dry run - file not written", nil
+				return "Dry run - not written", nil
 			}
 
 			return llm.HandleToolCall(call, workDir)
@@ -186,8 +198,8 @@ Rules:
 		llm.NewMessage("user", userPrompt),
 	}
 
-	result, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
-	return result, err
+	response, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
+	return response, err
 }
 
 func truncateString(s string, max int) string {
