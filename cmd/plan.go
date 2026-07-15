@@ -62,20 +62,13 @@ Output is saved to .maia/.generated/plan.md.`,
 		cwd, _ := os.Getwd()
 
 		// Build the system prompt
-		systemPrompt := `You are an expert software engineer creating a detailed implementation plan.
-
-Your task is to create a comprehensive, step-by-step plan for implementing a code change.
-
-You have access to tools to read files so you can examine specific code before planning changes.
-
-When creating the plan:
-1. Break the work into logical phases
-2. For each phase, list the exact files to create/modify
-3. Provide code samples showing what changes to make
-4. Consider dependencies between phases
-5. Estimate risk level
-
-Be specific and actionable. Include actual code samples where helpful.`
+		systemPrompt := "You create implementation plans from research.\n\n" +
+			"Plan format:\n" +
+			"- Phases with names and descriptions\n" +
+			"- Artifact table per phase (file, action, description)\n" +
+			"- Code samples for each artifact\n" +
+			"- Risk assessment\n\n" +
+			"Be specific. Include actual code."
 
 		userPrompt := fmt.Sprintf(`## Original Request
 

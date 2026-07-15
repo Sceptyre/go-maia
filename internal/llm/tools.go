@@ -8,7 +8,78 @@ import (
 	"strings"
 )
 
-// Tool definitions for file operations
+// ReadOnlyTools are tools for research (no write access)
+var ReadOnlyTools = []Tool{
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "read_file",
+			Description: "Read the contents of a file.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path to the file to read",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "list_files",
+			Description: "List files in a directory.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path to the directory",
+					},
+				},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "search_files",
+			Description: "Search for files matching a pattern.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "Glob pattern to match",
+					},
+				},
+				"required": []string{"pattern"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "grep_content",
+			Description: "Search for content within files.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Text to search for",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+	},
+}
+
+// FileTools are tools for reading and writing files
 var FileTools = []Tool{
 	{
 		Type: "function",
