@@ -183,7 +183,7 @@ func RunOrchestrator(changeContent, workDir string) (string, error) {
 	messages := BuildOrchestratorMessages(changeContent)
 
 	// Run orchestrator with task tool
-	response, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler)
+	response, _, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler)
 	if err != nil {
 		return "", err
 	}
@@ -193,50 +193,41 @@ func RunOrchestrator(changeContent, workDir string) (string, error) {
 
 // RunOrchestratorWithReformat runs orchestrator then reformats
 func RunOrchestratorWithReformat(changeContent, workDir string) (string, error) {
-	// First pass: orchestrator researches
-	research, err := RunOrchestrator(changeContent, workDir)
+	client := NewClient()
+	taskHandler := TaskHandler(workDir)
+	taskTool := TaskTool(nil, nil)
+
+	// Build initial messages
+	messages := BuildOrchestratorMessages(changeContent)
+
+	// Run orchestrator - it will make tasks and get results
+	fmt.Println("\n▶ Running orchestrator...")
+	response, allMessages, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler)
 	if err != nil {
 		return "", err
 	}
 
-	// Second pass: reformat
-	fmt.Println("\n▶ Formatting research document...")
-
-	client := NewClient()
-
-	bq := "`"
-	reformatPrompt := "Reformat this research into structured markdown with these sections:\n\n" +
-		bq + "```\n" +
-		"## Relevant Files\n" +
-		"### <file path>\n" +
-		"- **Purpose:** <what this file does>\n" +
-		"- **Relevance:** <how it relates to the change>\n" +
-		bq + "```\n\n" +
-		bq + "```\n" +
-		"## Code Patterns\n" +
-		"- **Pattern:** <description>\n" +
-		"- **Example:** <code snippet>\n" +
-		bq + "```\n\n" +
-		bq + "```\n" +
-		"## External Research\n" +
-		"- **Topic:** <findings with source URLs>\n" +
-		bq + "```\n\n" +
-		bq + "```\n" +
-		"## Key Conventions\n" +
-		"- <convention 1>\n" +
-		"- <convention 2>\n" +
-		bq + "```\n\n" +
-		bq + "```\n" +
-		"## Risks & Considerations\n" +
-		"- <risk>\n" +
-		bq + "```\n\n" +
-		"Include frontmatter with name, description, and timestamp.\n\n" +
-		"Reformat now:"
-
-	messages := []Message{
-		NewMessage("user", reformatPrompt),
-		NewMessage("assistant", research),
+	// If orchestrator gave a good response, use it
+	if len(response) > 100 {
+		return response, nil
 	}
 
-	return client.GetResponse(messages)
+	// Otherwise, ask for synthesis using the full conversation history
+	fmt.Println("\n▶ Synthesizing research findings...")
+
+	synthPrompt := "Based on the research above, synthesize all findings into a comprehensive research document. " +
+		"Include all relevant files, patterns, external research, and conventions discovered. " +
+		"Output a complete summary."
+
+	allMessages = append(allMessages,
+		NewMessage("assistant", response),
+		NewMessage("user", synthPrompt),
+	)
+
+	synthesis, err := client.GetResponse(allMessages)
+	if err != nil {
+		return response, nil // Return what we have
+	}
+
+	return synthesis, nil
 }

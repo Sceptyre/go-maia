@@ -186,7 +186,8 @@ Rules:
 		llm.NewMessage("user", userPrompt),
 	}
 
-	return client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
+	result, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
+	return result, err
 }
 
 func truncateString(s string, max int) string {

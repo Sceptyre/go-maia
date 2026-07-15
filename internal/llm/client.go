@@ -202,7 +202,8 @@ func (c *Client) GetResponse(messages []Message) (string, error) {
 }
 
 // GetResponseWithTools sends a request with tools and handles tool calls
-func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHandler func(ToolCall) (string, error)) (string, error) {
+// Returns the response and the full message history (including tool results)
+func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHandler func(ToolCall) (string, error)) (string, []Message, error) {
 	for i := 0; i < 20; i++ { // max iterations to prevent infinite loops
 		resp, err := c.Chat(messages, tools)
 		if err != nil {
@@ -210,20 +211,21 @@ func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHand
 			fmt.Fprintf(os.Stderr, "\n⚠ API error: %v\n", err)
 			if len(tools) > 0 {
 				fmt.Fprintf(os.Stderr, "⚠ Retrying without tools...\n")
-				return c.GetResponse(messages)
+				result, err := c.GetResponse(messages)
+				return result, messages, err
 			}
-			return "", err
+			return "", messages, err
 		}
 
 		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("no response from model")
+			return "", messages, fmt.Errorf("no response from model")
 		}
 
 		choice := resp.Choices[0]
 
 		// If no tool calls, return the response
 		if len(choice.Message.ToolCalls) == 0 {
-			return choice.Message.Content, nil
+			return choice.Message.Content, messages, nil
 		}
 
 		// Add assistant message with tool calls
@@ -245,5 +247,5 @@ func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHand
 		}
 	}
 
-	return "", fmt.Errorf("exceeded max iterations")
+	return "", messages, fmt.Errorf("exceeded max iterations")
 }

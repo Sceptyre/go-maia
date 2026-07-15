@@ -121,7 +121,7 @@ Produce a comprehensive implementation plan.`, changeContent, string(researchMD)
 			llm.NewMessage("user", userPrompt),
 		}
 
-		planning, err := client.GetResponseWithTools(messages, llm.FileTools, toolHandler)
+		planning, _, err := client.GetResponseWithTools(messages, llm.FileTools, toolHandler)
 		if err != nil {
 			return fmt.Errorf("AI planning failed: %w", err)
 		}
