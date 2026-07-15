@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -201,13 +202,37 @@ func (c *Client) GetResponse(messages []Message) (string, error) {
 	return resp.Choices[0].Message.Content, nil
 }
 
-// GetResponseWithTools sends a request with tools and handles tool calls
-// Returns the response and the full message history (including tool results)
-func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHandler func(ToolCall) (string, error)) (string, []Message, error) {
-	for i := 0; i < 20; i++ { // max iterations to prevent infinite loops
+// GetResponseWithTools sends a request with tools and handles tool calls.
+// Tool calls are executed concurrently for improved performance.
+// This is the backward-compatible entry point.
+func (c *Client) GetResponseWithTools(
+	messages []Message,
+	tools []Tool,
+	toolHandler func(ToolCall) (string, error),
+) (string, []Message, error) {
+	return c.GetResponseWithToolsContext(
+		context.Background(), messages, tools, toolHandler, DefaultConcurrentConfig())
+}
+
+// GetResponseWithToolsContext sends a request with tools and handles
+// tool calls with context cancellation support and configurable concurrency.
+func (c *Client) GetResponseWithToolsContext(
+	ctx context.Context,
+	messages []Message,
+	tools []Tool,
+	toolHandler func(ToolCall) (string, error),
+	config ConcurrentConfig,
+) (string, []Message, error) {
+	for i := 0; i < 20; i++ {
+		// Check context before each LLM call.
+		select {
+		case <-ctx.Done():
+			return "", messages, ctx.Err()
+		default:
+		}
+
 		resp, err := c.Chat(messages, tools)
 		if err != nil {
-			// Log the full error for debugging
 			fmt.Fprintf(os.Stderr, "\n⚠ API error: %v\n", err)
 			if len(tools) > 0 {
 				fmt.Fprintf(os.Stderr, "⚠ Retrying without tools...\n")
@@ -223,28 +248,24 @@ func (c *Client) GetResponseWithTools(messages []Message, tools []Tool, toolHand
 
 		choice := resp.Choices[0]
 
-		// If no tool calls, return the response
+		// No tool calls — return final answer.
 		if len(choice.Message.ToolCalls) == 0 {
 			return choice.Message.Content, messages, nil
 		}
 
-		// Add assistant message with tool calls
-		messages = append(messages, NewAssistantMessage(choice.Message.Content, choice.Message.ToolCalls))
+		// Append assistant message with tool-call metadata.
+		messages = append(messages,
+			NewAssistantMessage(choice.Message.Content, choice.Message.ToolCalls))
 
-		// Execute tool calls
-		for _, toolCall := range choice.Message.ToolCalls {
-			result, err := toolHandler(toolCall)
-			if err != nil {
-				result = fmt.Sprintf("Error: %s", err)
-			}
+		// Execute all tool calls concurrently.
+		toolResults := concurrentToolExecutor(
+			ctx, choice.Message.ToolCalls, toolHandler, config)
 
-			// Add tool result with tool_call_id
-			messages = append(messages, Message{
-				Role:       "tool",
-				Content:    strPtr(result),
-				ToolCallID: toolCall.ID,
-			})
-		}
+		// Append ordered results.
+		messages = append(messages, toolResults...)
+
+		fmt.Fprintf(os.Stderr,
+			"  [debug] Executed %d tool calls concurrently\n", len(toolResults))
 	}
 
 	return "", messages, fmt.Errorf("exceeded max iterations")
