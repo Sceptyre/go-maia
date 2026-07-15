@@ -223,7 +223,7 @@ func (c *Client) GetResponseWithToolsContext(
 	toolHandler func(ToolCall) (string, error),
 	config ConcurrentConfig,
 ) (string, []Message, error) {
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 100; i++ {
 		// Check context before each LLM call.
 		select {
 		case <-ctx.Done():
