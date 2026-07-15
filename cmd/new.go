@@ -106,6 +106,6 @@ func runGitCommand(args ...string) ([]byte, error) {
 }
 
 func init() {
-	newCmd.Flags().StringVarP(&baseBranch, "base", "b", "main", "Base branch to create worktree from")
+	newCmd.Flags().StringVarP(&baseBranch, "base", "b", "", "Base branch to create worktree from (default: current branch)")
 	rootCmd.AddCommand(newCmd)
 }

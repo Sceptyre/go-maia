@@ -27,13 +27,22 @@ var mergeCmd = &cobra.Command{
 			return err
 		}
 
-		// Get current branch
-	 getCurrentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		// Get current branch (the maia worktree branch)
+		getCurrentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 		out, err := getCurrentBranch.Output()
 		if err != nil {
 			return fmt.Errorf("failed to get current branch: %w", err)
 		}
 		branch := strings.TrimSpace(string(out))
+
+		// Get the branch in main worktree (where we want to merge into)
+		getMainBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		getMainBranch.Dir = mainDir
+		mainOut, err := getMainBranch.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get main branch: %w", err)
+		}
+		mainBranch := strings.TrimSpace(string(mainOut))
 
 		// Get description from change.md
 		description := "change"
@@ -49,11 +58,11 @@ var mergeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Merging branch: %s\n", branch)
-		fmt.Printf("Into: %s (main worktree)\n", mainDir)
+		fmt.Printf("Into: %s (%s)\n", mainBranch, mainDir)
 
 		// Checkout main and merge
 		commands := [][]string{
-			{"git", "checkout", baseBranch},
+			{"git", "checkout", mainBranch},
 			{"git", "merge", branch, "--no-ff", "-m", fmt.Sprintf("maia: %s", description)},
 		}
 
@@ -66,7 +75,7 @@ var mergeCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Println("\n✓ Changes merged to", baseBranch)
+		fmt.Println("\n✓ Changes merged to", mainBranch)
 		fmt.Printf("  Run 'maia cleanup' to remove the worktree\n")
 
 		return nil
@@ -74,6 +83,5 @@ var mergeCmd = &cobra.Command{
 }
 
 func init() {
-	mergeCmd.Flags().StringVarP(&baseBranch, "base", "b", "main", "Base branch to merge into")
 	rootCmd.AddCommand(mergeCmd)
 }

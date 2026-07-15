@@ -23,9 +23,15 @@ func List() ([]Worktree, error) {
 	return parseWorktreeList(string(out)), nil
 }
 
-// Create adds a new worktree with a new branch
+// Create adds a new worktree with a new branch.
+// If baseBranch is empty, uses current branch (git default).
 func Create(path, branch, baseBranch string) error {
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, path, baseBranch)
+	var cmd *exec.Cmd
+	if baseBranch != "" {
+		cmd = exec.Command("git", "worktree", "add", "-b", branch, path, baseBranch)
+	} else {
+		cmd = exec.Command("git", "worktree", "add", "-b", branch, path)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create worktree: %s\n%w", string(out), err)
 	}
