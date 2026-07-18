@@ -73,7 +73,7 @@ Output is saved to .maia/.generated/research.md for use by 'maia plan'.`,
 			fmt.Println("\n▶ Formatting research document...")
 			client := llm.NewClient()
 			research, _ = client.GetResponse([]llm.Message{
-				llm.NewMessage("user", "Format this research into structured markdown with sections: Relevant Files, Code Patterns, External Research, Key Conventions, Risks. Include frontmatter."),
+				llm.NewMessage("user", "Format this research into structured markdown with sections: Relevant Files, Code Patterns, External Research, Key Observations, Risks. Include frontmatter."),
 				llm.NewMessage("assistant", research),
 			})
 		}

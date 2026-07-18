@@ -124,7 +124,13 @@ func OrchestratorSystemPrompt() string {
 		"Rules:\n" +
 		"- Generate 2-4 specific tasks\n" +
 		"- Each task: specific action + clear intent\n" +
-		"- Use prior results to inform next tasks"
+		"- Use prior results to inform next tasks\n\n" +
+		"Research output must be structured with these sections:\n" +
+		"## Relevant Files\nList files related to the change. For each: path, purpose, key functions/types.\n" +
+		"## Code Patterns\nExisting conventions: error handling, naming, project structure, testing patterns.\n" +
+		"## External Research\nRelevant docs, APIs, libraries, or examples found on the web. Include source URLs.\n" +
+		"## Key Observations\nDependencies, constraints, or relationships that affect implementation.\n" +
+		"## Risks\nUncertainties, missing information, or areas that need clarification."
 }
 
 // BuildOrchestratorMessages creates the initial messages for the orchestrator
@@ -169,8 +175,9 @@ func RunOrchestratorWithReformat(changeContent, workDir string) (string, error) 
 		return response, nil
 	}
 
-	synthPrompt := "Synthesize all research findings into a summary. " +
-		"Include: relevant files, code patterns, external docs, conventions, risks."
+	synthPrompt := "Synthesize all research findings into the output template:\n" +
+		"## Relevant Files\n## Code Patterns\n## External Research\n## Key Observations\n## Risks\n\n" +
+		"Fill in each section with the findings from the tasks."
 
 	allMessages = append(allMessages,
 		NewMessage("assistant", response),
