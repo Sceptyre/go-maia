@@ -43,6 +43,8 @@ Workflow:
   # 1. Write your goal in .maia/change.md
   maia init                   # AI researches codebase + web → research.md
   maia plan                   # AI generates implementation plan → plan.md
+  maia show plan              # Display the implementation plan
+  maia show research          # Display the research document
   maia steer "your feedback"  # Revise plan based on feedback
   maia apply                  # AI executes the plan
   maia merge                  # Merge back to main

@@ -81,6 +81,7 @@ $EDITOR .maia/change.md
 # 5. Research → Plan → Execute
 maia init          # AI researches your codebase + web
 maia plan          # AI generates an implementation plan
+maia show plan     # Review the generated plan
 maia steer "use bcrypt for password hashing"  # Refine the plan
 maia apply --dry-run   # Preview changes
 maia apply             # Execute the plan
@@ -210,6 +211,7 @@ flowchart LR
 | **Create** | `maia new "description"` | Creates an isolated git worktree with a `.maia/change.md` template |
 | **Research** | `maia init` | Orchestrator spawns code and web agents to analyze the codebase and find external docs |
 | **Plan** | `maia plan` | AI generates a phased implementation plan with artifact tables and code samples |
+| **View** | `maia show <plan\|research>` | Display the contents of a generated document for review |
 | **Steer** | `maia steer "feedback"` | Revise the plan or research based on your feedback (repeatable) |
 | **Execute** | `maia apply` | AI executes the plan phase by phase, creating and modifying files |
 | **Merge** | `maia merge` | Merges the worktree branch back into your main branch |
@@ -278,6 +280,7 @@ maia merge
 | `maia list` | List active worktrees for the current repository |
 | `maia init` | Research the codebase and web → `research.md` |
 | `maia plan` | Generate a phased implementation plan → `plan.md` |
+| `maia show <plan\|research>` | Display the contents of a generated document |
 | `maia steer "feedback"` | Revise the plan based on your feedback |
 | `maia apply` | Execute the implementation plan |
 | `maia merge` | Merge the worktree branch back to main |
@@ -292,6 +295,10 @@ maia merge
 maia apply              # Execute all phases
 maia apply --phase 1    # Execute a specific phase only
 maia apply --dry-run    # Preview changes without writing files
+
+# Show
+maia show plan          # Display the implementation plan
+maia show research      # Display the research document
 
 # Steer
 maia steer "use bcrypt not argon2"                  # Revise the plan
