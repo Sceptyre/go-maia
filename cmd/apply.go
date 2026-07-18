@@ -81,11 +81,26 @@ Use --dry-run to preview without making changes.`,
 
 func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targetPhase int, dryRun bool) (string, error) {
 	systemPrompt := "You task an implementation agent to execute phases from a plan.\n\n" +
-		"For each phase, generate ONE task:\n" +
-		"implement phase <n>: <name> with the intent to <goal> using the following plan:\n" +
-		"- Artifact: <file> (<action>) - <description>\n" +
-		"- Code: <exact code from plan>\n\n" +
-		"Include all artifacts and code from the phase. Be explicit. Never read files."
+		"For each phase, generate ONE task that covers ALL artifacts in that phase.\n" +
+		"Keep phases small — if a phase has more than 3 artifacts, split it.\n\n" +
+		"Task format:\n" +
+		"do implement phase <n>: <name>\n" +
+		"intent: <what this phase accomplishes>\n\n" +
+		"Then list every artifact:\n" +
+		"- create <filepath>: <what this file does>\n" +
+		"  ```go\n<full file content>\n```\n" +
+		"- modify <filepath> (add): <what to add and WHERE>\n" +
+		"  ```go\n<new code to insert>\n```\n" +
+		"- modify <filepath> (replace): <what to replace>\n" +
+		"  old:\n```go\n<old code>\n```\n" +
+		"  new:\n```go\n<new code>\n```\n\n" +
+		"Rules:\n" +
+		"- Include every artifact from the phase's table.\n" +
+		"- For create: include the full file code.\n" +
+		"- For modify add: include only the new code and say where it goes.\n" +
+		"- For modify replace: include both old and new code.\n" +
+		"- Modify actions require reading the file first.\n\n" +
+		"Wait for each phase to complete before generating the next."
 
 	phaseDesc := "All phases"
 	if targetPhase > 0 {
@@ -96,15 +111,22 @@ func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targe
 		"Execute this plan.\n\n" +
 		"Target: " + phaseDesc + "\n\n" +
 		"For each Phase:\n" +
-		"1. Find the Artifact table\n" +
-		"2. For EACH artifact row, create a task using EXACTLY this format:\n" +
-		"   do write [filepath] with the intent to [description], using this code: [code from plan]\n" +
-		"3. Wait for completion, then next artifact\n\n" +
+		"1. Read the phase's artifact table and code blocks\n" +
+		"2. Generate ONE task covering all artifacts in that phase\n" +
+		"3. Wait for completion, then next phase\n\n" +
 		"Start Phase 1 now."
 
 	implementationAgent := llm.NewAgent(
 		"implementer",
-		"You write code to files as instructed. Use the code provided. Match existing style. Report what you wrote.",
+		`You implement code changes as instructed.
+
+- create: write the provided code to the file.
+- modify add: read the file, insert code at the specified location, write the complete updated file.
+- modify replace: read the file, find the old code, replace it with the new code, write the complete updated file.
+- modify update: write the provided complete file content.
+
+Report what you did.`,
+
 		llm.FileTools,
 		func(call llm.ToolCall) (string, error) {
 			fmt.Printf("    [impl] 🔧 %s", call.Function.Name)
@@ -116,7 +138,7 @@ func runApplyOrchestrator(client *llm.Client, planContent, workDir string, targe
 			fmt.Println()
 
 			if dryRun && call.Function.Name == "write_file" {
-				return "Dry run - not written", nil
+				return "Dry run — skipped", nil
 			}
 
 			return llm.HandleToolCall(call, workDir)

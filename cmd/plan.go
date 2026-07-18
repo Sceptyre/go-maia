@@ -139,16 +139,30 @@ Produce a comprehensive implementation plan.`, changeContent, string(researchMD)
 			"<description>\n\n" +
 			"| Artifact | Action | Description |\n" +
 			"|----------|--------|-------------|\n" +
-			"| " + bq + "path/to/file.go" + bq + " | create | <what this file does> |\n" +
-			"| " + bq + "path/to/other.go" + bq + " | modify | <what changes> |\n\n" +
-			"### " + bq + "path/to/file.go" + bq + "\n\n" +
-			"**<what this change does>**\n\n" +
+			"| " + bq + "path/to/new.go" + bq + " | create | <what this file does> |\n" +
+			"| " + bq + "path/to/existing.go" + bq + " | modify | <what changes and WHERE> |\n\n" +
+			"### " + bq + "path/to/new.go" + bq + " (create)\n\n" +
+			"**<what this file does>**\n\n" +
 			bq + "```\n" +
 			"go\n" +
-			"<code sample>\n" +
+			"<full file content>\n" +
+			bq + "```\n\n" +
+			"### " + bq + "path/to/existing.go" + bq + " (modify: add/replace)\n\n" +
+			"**<what this change does>**\n\n" +
+			"Action type: add after `function X` / replace the existing `function Y`\n\n" +
+			"Placement: <where in the file — be specific, e.g. 'add after the Init() function'>\n\n" +
+			bq + "```\n" +
+			"go\n" +
+			"<code to insert or replacement code>\n" +
 			bq + "```\n\n" +
 			"<repeat for each phase>\n" +
 			bq + "```\n\n" +
+			"IMPORTANT:\n" +
+			"- Keep phases small and focused. Each phase should be completable in one pass.\n" +
+			"- If a phase has more than 3 artifacts, split it into multiple phases.\n" +
+			"- For modify 'add': include only the NEW code to insert.\n" +
+			"- For modify 'replace': include the old code to find AND the new code.\n" +
+			"- Always specify exactly WHERE in the file the change goes.\n\n" +
 			"Reformat your complete plan now:"
 
 		messages = append(messages,
