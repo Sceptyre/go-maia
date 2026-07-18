@@ -62,36 +62,42 @@ Output is saved to .maia/.generated/plan.md.`,
 		cwd, _ := os.Getwd()
 
 		// Build the system prompt
-		systemPrompt := "You create implementation plans from research.\n\n" +
-			"Plan format:\n" +
-			"- Phases with names and descriptions\n" +
-			"- Artifact table per phase (file, action, description)\n" +
-			"- Code samples for each artifact\n" +
-			"- Risk assessment\n\n" +
-			"Be specific. Include actual code."
+		systemPrompt := "You are a planner, not a writer. You produce implementation plans —\n" +
+			"documents that describe WHAT to change and HOW, not the files themselves.\n\n" +
+			"Your output is a plan with phases. Each phase has:\n" +
+			"1. A name and description of what it accomplishes\n" +
+			"2. An artifact table listing files to create or modify\n" +
+			"3. Code samples showing the changes for each file\n\n" +
+			"Output format:\n\n" +
+			"## Phase 1: <name>\n" +
+			"<what this phase accomplishes>\n\n" +
+			"| Artifact | Action | Description |\n" +
+			"|----------|--------|-------------|\n" +
+			"| path/to/file.go | create | <what this file does> |\n" +
+			"| path/to/other.go | modify | <what changes> |\n\n" +
+			"### path/to/file.go (create)\n" +
+			"<code sample — the full file content>\n\n" +
+			"### path/to/other.go (modify)\n" +
+			"<code sample — only the new or changed code>\n\n" +
+			"This is a PLAN. Do not write the actual files. Do not output the finished\n" +
+			"README or finished code as a document. Describe each change as a task with\n" +
+			"artifact table and code sample."
 
-		userPrompt := fmt.Sprintf(`## Original Request
+		userPrompt := fmt.Sprintf(`## Change Request
 
 %s
 
-## Research
+## Research Findings
 
 %s
 
 ---
 
-Based on this research, create a detailed implementation plan.
+Write the implementation plan for this change.
 
-The plan should include:
-1. Multiple phases (logical groupings of work)
-2. For each phase:
-   - Clear description of what this phase accomplishes
-   - Table of artifacts (files to create/modify) with action and description
-   - Code samples showing specific changes (use before/after where helpful)
-3. Dependencies between phases
-4. Risk assessment
+The plan is a document with phases, artifact tables, and code samples. It is NOT the finished file. It describes what files to create or modify, what changes to make in each, and shows the code to write.
 
-Produce a comprehensive implementation plan.`, changeContent, string(researchMD))
+Do not write the README. Write a plan for updating the README.`, changeContent, string(researchMD))
 
 		fmt.Println("\n▶ Generating implementation plan...")
 		fmt.Printf("  Model: %s\n\n", client.Model)
@@ -177,11 +183,8 @@ Produce a comprehensive implementation plan.`, changeContent, string(researchMD)
 
 		fmt.Println("\n▶ Writing plan document...")
 
-		// Extract just the markdown
-		planMD := extractMarkdown(response)
-
 		// Write plan.md
-		if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "plan.md"), []byte(planMD), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "plan.md"), []byte(response), 0644); err != nil {
 			return fmt.Errorf("failed to write plan: %w", err)
 		}
 
