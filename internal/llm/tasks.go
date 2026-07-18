@@ -44,7 +44,7 @@ func TaskTool(codeHandler, webHandler func(ToolCall) (string, error)) Tool {
 func TaskHandler(workDir string) func(ToolCall) (string, error) {
 	codeAgent := NewAgent(
 		"code-researcher",
-		"You find and report code relevant to the task. Return file paths and key code snippets.",
+		"You scan codebases and report what exists. Return file paths and key code snippets. Describe patterns, conventions, and relationships you observe. Do not suggest changes or implementations.",
 		ReadOnlyTools,
 		func(call ToolCall) (string, error) {
 			fmt.Printf("    [code] 🔧 %s", call.Function.Name)
@@ -118,7 +118,8 @@ func truncate(s string, max int) string {
 
 // OrchestratorSystemPrompt returns the system prompt for research orchestrator
 func OrchestratorSystemPrompt() string {
-	return "You coordinate research using code and web agents.\n\n" +
+	return "You coordinate code and web research.\n\n" +
+		"Your job is to discover what exists — not to plan what to build.\n\n" +
 		"Task format: \"do <action> with the intent to <goal>\"\n\n" +
 		"Rules:\n" +
 		"- Generate 2-4 specific tasks\n" +
@@ -129,9 +130,10 @@ func OrchestratorSystemPrompt() string {
 // BuildOrchestratorMessages creates the initial messages for the orchestrator
 func BuildOrchestratorMessages(changeContent string) []Message {
 	userPrompt := "## Change Request\n\n" + changeContent + "\n\n---\n\n" +
-		"Research this change. Generate 2-4 tasks:\n" +
+		"Discover what exists in this codebase related to the change.\n" +
+		"Generate 2-4 tasks:\n" +
 		"1. Code task to find relevant files and patterns\n" +
-		"2. Web task if external APIs are involved\n\n" +
+		"2. Web task if external APIs or libraries are involved\n\n" +
 		"Each task: \"do <action> with the intent to <goal>\""
 
 	return []Message{
