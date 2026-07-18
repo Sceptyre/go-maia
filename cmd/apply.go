@@ -164,7 +164,28 @@ Report what you did.`,
 		return result, nil
 	}
 
-	taskTool := llm.TaskTool(nil, nil)
+	taskTool := llm.Tool{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "task",
+			Description: "Delegate a phase implementation to an agent.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"agent": map[string]interface{}{
+						"type":        "string",
+						"description": "Agent type: 'implementer'",
+						"enum":        []string{"implementer"},
+					},
+					"task": map[string]interface{}{
+						"type":        "string",
+						"description": "The implementation task",
+					},
+				},
+				"required": []string{"agent", "task"},
+			},
+		},
+	}
 
 	messages := []llm.Message{
 		llm.NewMessage("system", systemPrompt),
