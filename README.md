@@ -20,8 +20,8 @@
 <p align="center">
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="License"></a>
-  <a href="https://goreportcard.com/report/github.com/sceptyre/maia"><img src="https://img.shields.io/badge/Go_Report-Card-A?style=for-the-badge&logo=go&logoColor=white" alt="Go Report Card"></a>
-  <a href="https://github.com/sceptyre/maia/releases"><img src="https://img.shields.io/badge/Release-Latest-green?style=for-the-badge" alt="Release"></a>
+  <a href="https://goreportcard.com/report/github.com/sceptyre/go-maia"><img src="https://img.shields.io/badge/Go_Report-Card-A?style=for-the-badge&logo=go&logoColor=white" alt="Go Report Card"></a>
+  <a href="https://github.com/sceptyre/go-maia/releases"><img src="https://img.shields.io/badge/Release-Latest-green?style=for-the-badge" alt="Release"></a>
 </p>
 
 ---
@@ -59,7 +59,7 @@
 
 ```bash
 # 1. Install
-go install github.com/sceptyre/maia@latest
+go install github.com/sceptyre/go-maia@latest
 
 # 2. Configure (set your API key)
 mkdir -p ~/.maia
@@ -104,13 +104,13 @@ maia cleanup
 ### From source (recommended)
 
 ```bash
-go install github.com/sceptyre/maia@latest
+go install github.com/sceptyre/go-maia@latest
 ```
 
 ### Build from source
 
 ```bash
-git clone https://github.com/sceptyre/maia.git
+git clone https://github.com/sceptyre/go-maia.git
 cd maia
 go build -o maia .
 mv maia /usr/local/bin/   # or ~/bin, ~/.local/bin, etc.
@@ -340,7 +340,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 **Quick start for contributors:**
 
 ```bash
-git clone https://github.com/sceptyre/maia.git
+git clone https://github.com/sceptyre/go-maia.git
 cd maia
 go build .
 ./maia --help
