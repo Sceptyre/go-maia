@@ -67,7 +67,7 @@ func lockAwareToolHandler(
 	registry *FileLockRegistry,
 ) func(ToolCall) (string, error) {
 	return func(call ToolCall) (string, error) {
-		if call.Function.Name == "write_file" {
+		if call.Function.Name == "write_file" || call.Function.Name == "edit_file" {
 			var args map[string]string
 			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err == nil {
 				if fp := args["path"]; fp != "" {

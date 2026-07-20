@@ -8,19 +8,72 @@ import (
 	"strings"
 )
 
+// Tool name constants — single source of truth for all tool name strings.
+const (
+	ToolNameReadFile    = "read_file"
+	ToolNameWriteFile   = "write_file"
+	ToolNameEditFile    = "edit_file"
+	ToolNameListFiles   = "list_files"
+	ToolNameSearchFiles = "search_files"
+	ToolNameGrepContent = "grep_content"
+)
+
+// --- Typed argument structs for each tool ---
+
+type readFileArgs struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"` // 1-based, optional (0 = beginning)
+	EndLine   int    `json:"end_line"`   // 1-based, inclusive, optional (0 = end of file)
+}
+
+type editFileArgs struct {
+	Path      string `json:"path"`
+	Search    string `json:"search"`      // text-match mode: exact string to find
+	Replace   string `json:"replace"`     // text-match mode: replacement string
+	StartLine int    `json:"start_line"`  // range mode: 1-based start (mutually exclusive with Search)
+	EndLine   int    `json:"end_line"`    // range mode: 1-based inclusive end
+	NewText   string `json:"new_text"`    // range mode: replacement content
+}
+
+type writeFileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type listFilesArgs struct {
+	Path string `json:"path"`
+}
+
+type searchFilesArgs struct {
+	Pattern string `json:"pattern"`
+}
+
+type grepContentArgs struct {
+	Query string `json:"query"`
+	Path  string `json:"path"`
+}
+
 // ReadOnlyTools are tools for research (no write access)
 var ReadOnlyTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "read_file",
-			Description: "Read the contents of a file.",
+			Name:        ToolNameReadFile,
+			Description: "Read the contents of a file. Use start_line/end_line to read a specific range (1-based, inclusive). Output includes line-number prefixes for precise editing.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"path": map[string]interface{}{
 						"type":        "string",
 						"description": "Path to the file to read",
+					},
+					"start_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "First line to read (1-based, inclusive). Default: 1",
+					},
+					"end_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Last line to read (1-based, inclusive). Default: end of file",
 					},
 				},
 				"required": []string{"path"},
@@ -30,7 +83,7 @@ var ReadOnlyTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "list_files",
+			Name:        ToolNameListFiles,
 			Description: "List files in a directory.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -46,7 +99,7 @@ var ReadOnlyTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "search_files",
+			Name:        ToolNameSearchFiles,
 			Description: "Search for files matching a pattern.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -63,7 +116,7 @@ var ReadOnlyTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "grep_content",
+			Name:        ToolNameGrepContent,
 			Description: "Search for content within files.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -84,14 +137,22 @@ var FileTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "read_file",
-			Description: "Read the contents of a file. Use this to examine code and understand the codebase.",
+			Name:        ToolNameReadFile,
+			Description: "Read the contents of a file. Use start_line/end_line to read a specific range (1-based, inclusive). Output includes line-number prefixes for precise editing.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"path": map[string]interface{}{
 						"type":        "string",
 						"description": "Path to the file to read",
+					},
+					"start_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "First line to read (1-based, inclusive). Default: 1",
+					},
+					"end_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Last line to read (1-based, inclusive). Default: end of file",
 					},
 				},
 				"required": []string{"path"},
@@ -101,7 +162,44 @@ var FileTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "write_file",
+			Name:        ToolNameEditFile,
+			Description: "Edit a file using search/replace text matching or line-range replacement. Search/replace mode: provide 'search' (exact text to find) and 'replace' (new text). Line-range mode: provide 'start_line', 'end_line', and 'new_text'.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path to the file to edit",
+					},
+					"search": map[string]interface{}{
+						"type":        "string",
+						"description": "Exact text to find (search/replace mode)",
+					},
+					"replace": map[string]interface{}{
+						"type":        "string",
+						"description": "Replacement text (search/replace mode)",
+					},
+					"start_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "First line to replace (line-range mode, 1-based inclusive)",
+					},
+					"end_line": map[string]interface{}{
+						"type":        "integer",
+						"description": "Last line to replace (line-range mode, 1-based inclusive)",
+					},
+					"new_text": map[string]interface{}{
+						"type":        "string",
+						"description": "Replacement content (line-range mode)",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        ToolNameWriteFile,
 			Description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -122,7 +220,7 @@ var FileTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "list_files",
+			Name:        ToolNameListFiles,
 			Description: "List files in a directory. Returns file names and whether they are directories.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -138,7 +236,7 @@ var FileTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "search_files",
+			Name:        ToolNameSearchFiles,
 			Description: "Search for files matching a pattern. Returns matching file paths.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -155,7 +253,7 @@ var FileTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "grep_content",
+			Name:        ToolNameGrepContent,
 			Description: "Search for content within files. Returns matching lines with file paths.",
 			Parameters: map[string]interface{}{
 				"type": "object",
@@ -184,40 +282,84 @@ type ToolCallResult struct {
 
 // HandleToolCall processes a tool call and returns the result
 func HandleToolCall(call ToolCall, workDir string) (string, error) {
-	var args map[string]string
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-		return "", fmt.Errorf("failed to parse arguments: %w", err)
-	}
-
 	switch call.Function.Name {
-	case "read_file":
-		return handleReadFile(args["path"], workDir)
-	case "write_file":
-		return handleWriteFile(args["path"], args["content"], workDir)
-	case "list_files":
-		return handleListFiles(args["path"], workDir)
-	case "search_files":
-		return handleSearchFiles(args["pattern"], workDir)
-	case "grep_content":
-		return handleGrepContent(args["query"], args["path"], workDir)
+	case ToolNameReadFile:
+		var a readFileArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleReadFile(a, workDir)
+	case ToolNameEditFile:
+		var a editFileArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleEditFile(a, workDir)
+	case ToolNameWriteFile:
+		var a writeFileArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleWriteFile(a.Path, a.Content, workDir)
+	case ToolNameListFiles:
+		var a listFilesArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleListFiles(a.Path, workDir)
+	case ToolNameSearchFiles:
+		var a searchFilesArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleSearchFiles(a.Pattern, workDir)
+	case ToolNameGrepContent:
+		var a grepContentArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+			return "", fmt.Errorf("failed to parse arguments: %w", err)
+		}
+		return handleGrepContent(a.Query, a.Path, workDir)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
 }
 
-func handleReadFile(path, workDir string) (string, error) {
-	fullPath := resolvePath(path, workDir)
+func handleReadFile(a readFileArgs, workDir string) (string, error) {
+	fullPath := resolvePath(a.Path, workDir)
 
-	// Safety check: ensure we're reading within the working directory
 	if !isWithinDir(fullPath, workDir) {
-		return "", fmt.Errorf("security: cannot read outside working directory: %s", path)
+		return "", fmt.Errorf("security: cannot read outside working directory: %s", a.Path)
 	}
 
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
-	return string(data), nil
+
+	lines := strings.Split(string(data), "\n")
+	totalLines := len(lines)
+
+	start := a.StartLine
+	end := a.EndLine
+	if start <= 0 {
+		start = 1
+	}
+	if end <= 0 || end > totalLines {
+		end = totalLines
+	}
+	if start > totalLines {
+		return "", fmt.Errorf("start_line %d exceeds file length %d", start, totalLines)
+	}
+	if start > end {
+		return "", fmt.Errorf("start_line %d is after end_line %d", start, end)
+	}
+
+	selected := lines[start-1 : end]
+	var sb strings.Builder
+	for i, line := range selected {
+		sb.WriteString(fmt.Sprintf("%d\t%s\n", start+i, line))
+	}
+	return sb.String(), nil
 }
 
 func handleWriteFile(path, content, workDir string) (string, error) {
@@ -239,6 +381,77 @@ func handleWriteFile(path, content, workDir string) (string, error) {
 	}
 
 	return fmt.Sprintf("Successfully wrote to %s", path), nil
+}
+
+func handleEditFile(a editFileArgs, workDir string) (string, error) {
+	fullPath := resolvePath(a.Path, workDir)
+
+	if !isWithinDir(fullPath, workDir) {
+		return "", fmt.Errorf("security: cannot write outside working directory: %s", a.Path)
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	content := string(data)
+
+	// Mode 1: Text-match (search/replace)
+	if a.Search != "" {
+		if !strings.Contains(content, a.Search) {
+			return "", fmt.Errorf("search text not found in %s — re-read the file and try again with the exact text", a.Path)
+		}
+
+		count := strings.Count(content, a.Search)
+		if count > 1 {
+			return "", fmt.Errorf("search text found %d times in %s — provide more context to make it unique", count, a.Path)
+		}
+
+		newContent := strings.Replace(content, a.Search, a.Replace, 1)
+
+		dir := filepath.Dir(fullPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create directory: %w", err)
+		}
+		if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+			return "", fmt.Errorf("failed to write file: %w", err)
+		}
+		return fmt.Sprintf("Successfully edited %s (search/replace)", a.Path), nil
+	}
+
+	// Mode 2: Line-range replacement
+	if a.StartLine > 0 && a.EndLine > 0 && a.NewText != "" {
+		lines := strings.Split(content, "\n")
+		totalLines := len(lines)
+
+		if a.StartLine > totalLines {
+			return "", fmt.Errorf("start_line %d exceeds file length %d", a.StartLine, totalLines)
+		}
+		if a.EndLine > totalLines {
+			return "", fmt.Errorf("end_line %d exceeds file length %d", a.EndLine, totalLines)
+		}
+		if a.StartLine > a.EndLine {
+			return "", fmt.Errorf("start_line %d is after end_line %d", a.StartLine, a.EndLine)
+		}
+
+		newLines := make([]string, 0, len(lines))
+		newLines = append(newLines, lines[:a.StartLine-1]...)
+		newLines = append(newLines, a.NewText)
+		newLines = append(newLines, lines[a.EndLine:]...)
+
+		newContent := strings.Join(newLines, "\n")
+
+		dir := filepath.Dir(fullPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create directory: %w", err)
+		}
+		if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+			return "", fmt.Errorf("failed to write file: %w", err)
+		}
+		return fmt.Sprintf("Successfully edited %s (lines %d–%d)", a.Path, a.StartLine, a.EndLine), nil
+	}
+
+	return "", fmt.Errorf("edit_file requires either search/replace or start_line+end_line+new_text")
 }
 
 func handleListFiles(path, workDir string) (string, error) {
