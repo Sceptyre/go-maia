@@ -137,7 +137,7 @@ Report what you did.`,
 			}
 			fmt.Println()
 
-			if dryRun && call.Function.Name == "write_file" {
+			if dryRun && (call.Function.Name == "write_file" || call.Function.Name == "edit_file") {
 				return "Dry run — skipped", nil
 			}
 
