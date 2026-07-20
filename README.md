@@ -33,6 +33,7 @@
 - 🎯 **Steer the Plan** — Give feedback like *"use bcrypt, not argon2"* and the plan updates without losing context
 - 🌳 **Worktree Isolation** — Every change lives in a git worktree — your main branch is never touched until you merge
 - 👤 **Human in the Loop** — Review the plan, run `--dry-run`, execute phase-by-phase, or apply everything at once
+- 🎨 **Rendered Terminal Output** — Plans, research, and results display as styled markdown with syntax-highlighted code blocks in the terminal
 - 🤖 **Orchestrator → Subagent Architecture** — A planner agent coordinates specialized code and web research agents
 - 🔗 **OpenAI-Compatible** — Works with OpenAI, Azure, Ollama, LM Studio, or any OpenAI-compatible API
 - 🔒 **Secret Management** — API keys support `{cmd:...}` syntax so secrets never live in plaintext
@@ -188,6 +189,16 @@ Environment variables override config file values:
 | `MAIA_MODEL` | `model` | Model to use |
 | `BRAVE_API_KEY` | `brave_api_key` | Brave Search API key |
 
+### Terminal Output
+
+Maia renders markdown content with styled headers, syntax-highlighted code blocks, and formatted tables when output goes to a terminal. When output is piped or redirected, raw text is used instead.
+
+To disable colored output, set the standard [`NO_COLOR`](https://no-color.org/) environment variable:
+
+```bash
+NO_COLOR=1 maia show plan
+```
+
 ## 🔧 How It Works
 
 ```mermaid
@@ -329,6 +340,8 @@ All generated files live in `.maia/.generated/`. Your `change.md` is the one fil
 
 - [Go](https://go.dev/) — Core language
 - [Cobra](https://github.com/spf13/cobra) — CLI framework
+- [Glamour](https://github.com/charmbracelet/glamour) — Markdown rendering for the terminal
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling (transitive via glamour)
 - [OpenAI API](https://platform.openai.com/docs/api-reference) — LLM integration (compatible with Azure, Ollama, LM Studio)
 - [Brave Search API](https://api.search.brave.com/) — Web research (optional, falls back to DuckDuckGo)
 - [Git Worktrees](https://git-scm.com/docs/git-worktree) — Branch isolation

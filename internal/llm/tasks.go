@@ -3,6 +3,8 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/sceptyre/maia/internal/render"
 )
 
 // TaskResult represents the result of a subagent task
@@ -87,7 +89,7 @@ func TaskHandler(workDir string) func(ToolCall) (string, error) {
 			return "", fmt.Errorf("failed to parse task: %w", err)
 		}
 
-		fmt.Printf("\n  📋 %s\n", truncate(args.Task, 120))
+		fmt.Printf("\n  📋 %s\n", render.Truncate(args.Task, 120))
 
 		var result string
 		var err error
@@ -107,13 +109,6 @@ func TaskHandler(workDir string) func(ToolCall) (string, error) {
 
 		return result, nil
 	}
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
 
 // OrchestratorSystemPrompt returns the system prompt for research orchestrator

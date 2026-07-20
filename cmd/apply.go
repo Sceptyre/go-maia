@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sceptyre/maia/internal/llm"
+	"github.com/sceptyre/maia/internal/render"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -69,7 +70,7 @@ Use --dry-run to preview without making changes.`,
 
 		fmt.Println(strings.Repeat("─", 60))
 		fmt.Println("\n✓ Implementation complete!")
-		fmt.Printf("\n%s\n", result)
+		fmt.Print("\n" + render.RenderMarkdown(result) + "\n")
 		fmt.Println("\nNext steps:")
 		fmt.Println("  Review: git diff")
 		fmt.Println("  Commit: git add . && git commit")
@@ -154,7 +155,7 @@ Report what you did.`,
 			return "", fmt.Errorf("failed to parse task: %w", err)
 		}
 
-		fmt.Printf("\n  📋 %s\n", truncateString(args.Task, 150))
+		fmt.Printf("\n  📋 %s\n", render.Truncate(args.Task, 150))
 
 		result, err := implementationAgent.Run(args.Task)
 		if err != nil {
@@ -196,12 +197,6 @@ Report what you did.`,
 	return response, err
 }
 
-func truncateString(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
-}
 
 func init() {
 	applyCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Preview changes without applying")

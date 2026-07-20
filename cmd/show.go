@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sceptyre/maia/internal/render"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -52,7 +53,7 @@ Examples:
 			return fmt.Errorf("failed to read %s: %w", filename, err)
 		}
 
-		fmt.Print(string(content))
+		fmt.Print(render.RenderMarkdown(string(content)))
 
 		return nil
 	},

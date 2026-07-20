@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sceptyre/maia/internal/llm"
+	"github.com/sceptyre/maia/internal/render"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -119,7 +120,7 @@ Output the complete revised plan.`, string(planMD), feedback)
 
 	fmt.Println(strings.Repeat("─", 60))
 	fmt.Println("\n✓ Plan revised!")
-	fmt.Printf("\nFeedback: %s\n", truncate(feedback, 80))
+	fmt.Printf("\nFeedback: %s\n", render.Truncate(feedback, 80))
 	fmt.Println("\nReview: cat .maia/.generated/plan.md")
 	fmt.Println("Apply:  maia apply")
 	fmt.Println("Steer:  maia steer 'more feedback'")
@@ -190,19 +191,12 @@ Output the complete revised research document.`, string(researchMD), feedback)
 
 	fmt.Println(strings.Repeat("─", 60))
 	fmt.Println("\n✓ Research revised!")
-	fmt.Printf("\nFeedback: %s\n", truncate(feedback, 80))
+	fmt.Printf("\nFeedback: %s\n", render.Truncate(feedback, 80))
 	fmt.Println("\nReview: cat .maia/.generated/research.md")
 	fmt.Println("Plan:   maia plan")
 	fmt.Println("Steer:  maia steer --research 'more feedback'")
 
 	return nil
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
 
 func init() {
