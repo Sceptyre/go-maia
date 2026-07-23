@@ -80,9 +80,10 @@ status: new
 
 		fmt.Printf("\n✓ Change request created\n")
 		fmt.Printf("\nNext steps:\n")
-		fmt.Printf("  cd %s\n", worktreePath)
-		fmt.Printf("  # Write your goal in .maia/change.md\n")
-		fmt.Printf("  maia init\n")
+		fmt.Printf("  maia edit %s          # Edit your change goals\n", slug)
+		fmt.Printf("  maia show change %s   # View your change request\n", slug)
+		fmt.Printf("  maia init             # Run AI research (in worktree)\n")
+		fmt.Printf("  maia list             # See all active worktrees\n")
 		return nil
 	},
 }

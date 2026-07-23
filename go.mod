@@ -1,6 +1,8 @@
 module github.com/sceptyre/maia
 
-go 1.26.5
+go 1.23.0
+
+toolchain go1.24.4
 
 require (
 	github.com/charmbracelet/glamour v0.8.0
@@ -30,3 +32,4 @@ require (
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 )
+

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/sceptyre/maia/internal/git"
@@ -12,41 +13,66 @@ import (
 )
 
 var mergeCmd = &cobra.Command{
-	Use:   "merge",
+	Use:   "merge [slug]",
 	Short: "Merge changes back to main",
-	Long:  `Merge the worktree branch back into the base branch and clean up.`,
+	Long: `Merge the worktree branch back into the base branch.
+
+With a slug, merges the specified worktree from the parent branch.
+Without a slug, assumes you're currently in the worktree (legacy behavior).
+
+Examples:
+  maia merge my-slug   # Merge 'my-slug' worktree from parent branch
+  maia merge           # Merge current worktree (must be in worktree)
+
+This is a destructive operation — commit all changes before merging.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Check if we're in a maia worktree
-		if !state.HasWorktree() {
-			return fmt.Errorf("not in a maia worktree. Run 'maia new' first, then cd to the worktree")
+		var worktreePath string
+
+		if len(args) > 0 {
+			// Slug provided — resolve from parent repo
+			resolved, err := state.ValidateWorktreeExists(args[0])
+			if err != nil {
+				return err
+			}
+			worktreePath = resolved
+		} else {
+			// No slug — assume CWD is the worktree (legacy behavior)
+			if !state.HasWorktree() {
+				return fmt.Errorf("not in a maia worktree. Provide a slug: maia merge <slug>")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			worktreePath = cwd
 		}
 
-		// Get main directory
 		mainDir, err := git.GetMainDir()
 		if err != nil {
 			return err
 		}
 
-		// Get current branch (the maia worktree branch)
-		getCurrentBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		out, err := getCurrentBranch.Output()
+		// Get current branch of the worktree using git -C
+		getBranch := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+		out, err := getBranch.Output()
 		if err != nil {
-			return fmt.Errorf("failed to get current branch: %w", err)
+			return fmt.Errorf("failed to get branch for worktree: %w", err)
 		}
 		branch := strings.TrimSpace(string(out))
 
-		// Get the branch in main worktree (where we want to merge into)
-		getMainBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		getMainBranch.Dir = mainDir
+		// Get the current branch in main repo
+		getMainBranch := exec.Command("git", "-C", mainDir, "rev-parse", "--abbrev-ref", "HEAD")
 		mainOut, err := getMainBranch.Output()
 		if err != nil {
 			return fmt.Errorf("failed to get main branch: %w", err)
 		}
 		mainBranch := strings.TrimSpace(string(mainOut))
 
-		// Get description from change.md
+		// Get description from change.md in the worktree
 		description := "change"
-		changeMD, err := os.ReadFile(".maia/change.md")
+		changeMDPath := filepath.Join(worktreePath, state.StateDir, "change.md")
+		changeMD, err := os.ReadFile(changeMDPath)
 		if err == nil {
 			lines := strings.Split(string(changeMD), "\n")
 			for _, line := range lines {
@@ -60,23 +86,21 @@ var mergeCmd = &cobra.Command{
 		fmt.Printf("Merging branch: %s\n", branch)
 		fmt.Printf("Into: %s (%s)\n", mainBranch, mainDir)
 
-		// Checkout main and merge
 		commands := [][]string{
-			{"git", "checkout", mainBranch},
-			{"git", "merge", branch, "--no-ff", "-m", fmt.Sprintf("maia: %s", description)},
+			{"git", "-C", mainDir, "checkout", mainBranch},
+			{"git", "-C", mainDir, "merge", branch, "--no-ff", "-m", fmt.Sprintf("maia: %s", description)},
 		}
 
-		for _, args := range commands {
-			cmd := exec.Command(args[0], args[1:]...)
-			cmd.Dir = mainDir
-			if out, err := cmd.CombinedOutput(); err != nil {
+		for _, c := range commands {
+			mergeCmd := exec.Command(c[0], c[1:]...)
+			if out, err := mergeCmd.CombinedOutput(); err != nil {
 				fmt.Println(string(out))
-				return fmt.Errorf("merge failed: %w", err)
+				return err
 			}
 		}
 
 		fmt.Println("\n✓ Changes merged to", mainBranch)
-		fmt.Printf("  Run 'maia cleanup' to remove the worktree\n")
+		fmt.Printf("  Run 'maia cleanup %s' to remove the worktree\n", filepath.Base(worktreePath))
 
 		return nil
 	},

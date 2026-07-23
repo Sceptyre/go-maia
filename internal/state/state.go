@@ -200,6 +200,29 @@ func ListWorktrees() ([]string, error) {
 	return listWorktreesInDir(repoDir)
 }
 
+// ResolveWorktreePath resolves a slug to its full worktree path.
+// It joins the repo-specific worktree directory with the slug.
+func ResolveWorktreePath(slug string) (string, error) {
+	repoDir, err := GetRepoWorktreeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(repoDir, slug), nil
+}
+
+// ValidateWorktreeExists checks that a slug resolves to an existing directory.
+// Returns the resolved path if valid, or a helpful error message if not.
+func ValidateWorktreeExists(slug string) (string, error) {
+	path, err := ResolveWorktreePath(slug)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return "", fmt.Errorf("worktree not found for slug '%s' at %s\nRun 'maia list' to see available worktrees", slug, path)
+	}
+	return path, nil
+}
+
 func listWorktreesInDir(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
