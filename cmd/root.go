@@ -35,20 +35,23 @@ Configuration:
 
   Environment variables override config file values.
 
-Workflow:
-  maia new "description"      # Create isolated worktree + change.md
-  maia list                   # Show active worktrees
-  
-  # In the worktree:
-  # 1. Write your goal in .maia/change.md
-  maia init                   # AI researches codebase + web → research.md
-  maia plan                   # AI generates implementation plan → plan.md
-  maia show plan              # Display the implementation plan
-  maia show research          # Display the research document
-  maia steer "your feedback"  # Revise plan based on feedback
-  maia apply                  # AI executes the plan
-  maia merge                  # Merge back to main
-  maia cleanup                # Remove worktree
+Workflow (from parent branch — never leave it):
+  maia new "description"       # Create worktree + change.md
+  maia list                    # Show active worktrees
+  maia edit <slug>             # Edit change.md ($EDITOR or pipe)
+  maia show change <slug>      # View change request
+  maia diff <slug>             # View uncommitted changes
+  maia commit <slug> "msg"     # Commit changes
+  maia merge <slug>            # Merge back to main
+  maia cleanup <slug>          # Remove worktree
+
+  # Inside the worktree (when needed):
+  maia init                    # AI research → research.md
+  maia plan                    # AI plan → plan.md
+  maia show plan               # Display the plan
+  maia show research           # Display the research
+  maia steer "feedback"        # Revise plan based on feedback
+  maia apply                   # AI executes the plan
 
 Steering:
   maia steer "use bcrypt not argon2"

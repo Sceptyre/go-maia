@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/sceptyre/maia/internal/git"
 	"github.com/sceptyre/maia/internal/state"
@@ -20,11 +19,11 @@ var cleanupCmd = &cobra.Command{
 
 		if len(args) > 0 {
 			// Remove specified worktree
-			repoDir, err := state.GetRepoWorktreeDir()
+			resolved, err := state.ValidateWorktreeExists(args[0])
 			if err != nil {
 				return err
 			}
-			worktreePath = filepath.Join(repoDir, args[0])
+			worktreePath = resolved
 		} else {
 			// Remove current worktree
 			cwd, err := os.Getwd()
