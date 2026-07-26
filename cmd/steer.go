@@ -7,199 +7,149 @@ import (
 	"strings"
 
 	"github.com/sceptyre/maia/internal/llm"
-	"github.com/sceptyre/maia/internal/render"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
 
-var (
-	steerResearch bool
-)
-
 var steerCmd = &cobra.Command{
-	Use:   "steer [feedback]",
-	Short: "Revise the plan based on feedback",
-	Long: `Refine or revise the implementation plan based on your feedback.
+	Use:   "steer <feedback> [slug]",
+	Short: "Adjust direction based on feedback",
+	Long: `Provide feedback to adjust the plan or research.
+This helps redirect AI efforts based on your review.
 
-Provide specific feedback like:
-- "Add a phase for database migrations before the handler changes"
-- "Use bcrypt instead of argon2 for password hashing"
-- "Make sure to handle the case where user already exists"
-- "Follow the pattern in cmd/users.go for the new handler"
+Without a slug, runs in the current worktree.
+With a slug, runs from the parent branch against the specified worktree.
 
-The plan will be updated with your guidance incorporated.
-
-Use --research to revise the research document instead.`,
-	Args: cobra.ExactArgs(1),
+Examples:
+  maia steer "too many phases"           # Steer current worktree
+  maia steer "too many phases" my-slug   # Steer 'my-slug' from parent branch`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		feedback := args[0]
 
-		// Verify we're in a maia worktree
-		if !state.HasWorktree() {
-			return fmt.Errorf("not in a maia worktree. Run 'maia new' first, then cd to the worktree")
+		var worktreePath string
+
+		if len(args) > 1 {
+			// Slug provided — resolve from parent repo
+			resolved, err := state.ValidateWorktreeExists(args[1])
+			if err != nil {
+				return err
+			}
+			worktreePath = resolved
+		} else {
+			// No slug — assume CWD is a worktree
+			if !state.HasWorktree() {
+				return fmt.Errorf("not in a maia worktree. Provide a slug: maia steer <feedback> <slug>")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			worktreePath = cwd
 		}
 
-		// Check for change.md
-		if !state.HasChangeFile() {
-			return fmt.Errorf("change.md not found. Run 'maia new' first")
+		// Verify worktree exists
+		if !state.HasWorktreeIn(worktreePath) {
+			return fmt.Errorf("not a maia worktree: %s", worktreePath)
 		}
 
-		// Initialize LLM client
 		client := llm.NewClient()
 		if client.APIKey == "" {
 			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")
 		}
 
-		if steerResearch {
-			return steerResearchDoc(client, feedback)
+		fmt.Println("═══════════════════════════════════════════════════════════════")
+		fmt.Println("  MAIA STEER - Adjusting Direction")
+		fmt.Println("═══════════════════════════════════════════════════════════════")
+		fmt.Println(strings.Repeat("─", 60))
+		fmt.Printf("\nFeedback: %s\n\n", feedback)
+
+		// Check what stage we're at and steer accordingly
+		hasPlan := state.HasPlanIn(worktreePath)
+		hasResearch := state.HasResearchIn(worktreePath)
+
+		if hasPlan {
+			fmt.Println("▶ Adjusting plan based on feedback...\n")
+			if err := steerPlan(client, feedback, worktreePath); err != nil {
+				return fmt.Errorf("failed to steer plan: %w", err)
+			}
+			fmt.Println(strings.Repeat("─", 60))
+			fmt.Println("\n✓ Plan adjusted!")
+			fmt.Println("\nNext step: maia apply")
+		} else if hasResearch {
+			fmt.Println("▶ Adjusting research based on feedback...\n")
+			if err := steerResearchDoc(client, feedback, worktreePath); err != nil {
+				return fmt.Errorf("failed to steer research: %w", err)
+			}
+			fmt.Println(strings.Repeat("─", 60))
+			fmt.Println("\n✓ Research adjusted!")
+			fmt.Println("\nNext step: maia plan")
+		} else {
+			return fmt.Errorf("no research or plan found to steer. Run 'maia init' first")
 		}
-		return steerPlan(client, feedback)
+
+		return nil
 	},
 }
 
-func steerPlan(client *llm.Client, feedback string) error {
-	// Check for plan
-	if !state.HasPlan() {
-		return fmt.Errorf("plan.md not found. Run 'maia plan' first")
-	}
-
-	// Read current plan
-	planMD, err := os.ReadFile(filepath.Join(state.GetGeneratedDir(), "plan.md"))
+func steerPlan(client *llm.Client, feedback, worktreePath string) error {
+	// Read current plan using absolute path
+	planData, err := os.ReadFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "plan.md"))
 	if err != nil {
-		return fmt.Errorf("failed to read plan.md: %w", err)
+		return fmt.Errorf("failed to read plan: %w", err)
 	}
 
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println("  MAIA STEER - Revising Plan")
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Printf("\nFeedback: %s\n\n", feedback)
-
-	fmt.Println("▶ Revising plan with your feedback...")
-
-	revisePrompt := fmt.Sprintf(`## Current Plan
-
-%s
-
----
-
-## Feedback
-
-%s
-
----
-
-Revise the plan incorporating this feedback.
-
-Rules:
-1. Keep what's good - only change what's needed based on feedback
-2. Maintain the same markdown structure with frontmatter
-3. Be specific about what changed and why
-4. If feedback adds new requirements, add them to the appropriate phase
-5. If feedback corrects something, fix it directly
-
-Output the complete revised plan.`, string(planMD), feedback)
-
-	messages := []llm.Message{
-		llm.NewMessage("system", "You revise implementation plans based on user feedback. Keep the structure, incorporate the changes."),
-		llm.NewMessage("user", revisePrompt),
-	}
-
-	response, err := client.GetResponse(messages)
+	// Read change.md for context using absolute path
+	changeData, err := os.ReadFile(filepath.Join(worktreePath, state.StateDir, "change.md"))
 	if err != nil {
-		return fmt.Errorf("AI revision failed: %w", err)
+		return fmt.Errorf("failed to read change.md: %w", err)
 	}
 
-	fmt.Println("\n▶ Writing revised plan...")
-
-	planMD = []byte(extractMarkdown(response))
-
-	if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "plan.md"), []byte(planMD), 0644); err != nil {
-		return fmt.Errorf("failed to write plan: %w", err)
+	response, err := client.GetResponse([]llm.Message{
+		llm.NewMessage("system", "You are adjusting an implementation plan based on user feedback. Keep the plan focused and actionable. Output the complete updated plan."),
+		llm.NewMessage("user", fmt.Sprintf("## Current Plan\n\n%s\n\n## Change Request\n\n%s\n\n## Feedback\n\n%s\n\nPlease adjust the plan based on this feedback. Output the complete updated plan.", string(planData), string(changeData), feedback)),
+	})
+	if err != nil {
+		return err
 	}
 
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Println("\n✓ Plan revised!")
-	fmt.Printf("\nFeedback: %s\n", render.Truncate(feedback, 80))
-	fmt.Println("\nReview: cat .maia/.generated/plan.md")
-	fmt.Println("Apply:  maia apply")
-	fmt.Println("Steer:  maia steer 'more feedback'")
+	// Write updated plan using absolute path
+	if err := os.WriteFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "plan.md"), []byte(response), 0644); err != nil {
+		return fmt.Errorf("failed to write updated plan: %w", err)
+	}
 
 	return nil
 }
 
-func steerResearchDoc(client *llm.Client, feedback string) error {
-	// Check for research
-	if !state.HasResearch() {
-		return fmt.Errorf("research.md not found. Run 'maia init' first")
-	}
-
-	// Read current research
-	researchMD, err := os.ReadFile(filepath.Join(state.GetGeneratedDir(), "research.md"))
+func steerResearchDoc(client *llm.Client, feedback, worktreePath string) error {
+	// Read current research using absolute path
+	researchData, err := os.ReadFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "research.md"))
 	if err != nil {
-		return fmt.Errorf("failed to read research.md: %w", err)
+		return fmt.Errorf("failed to read research: %w", err)
 	}
 
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println("  MAIA STEER - Revising Research")
-	fmt.Println("═══════════════════════════════════════════════════════════════")
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Printf("\nFeedback: %s\n\n", feedback)
-
-	fmt.Println("▶ Revising research with your feedback...")
-
-	revisePrompt := fmt.Sprintf(`## Current Research
-
-%s
-
----
-
-## Feedback
-
-%s
-
----
-
-Revise the research incorporating this feedback.
-
-Rules:
-1. Keep what's useful - only change what's needed based on feedback
-2. Maintain the same markdown structure with frontmatter
-3. Add missing information requested in feedback
-4. Remove irrelevant information if feedback indicates it's not needed
-5. Be specific about what changed and why
-
-Output the complete revised research document.`, string(researchMD), feedback)
-
-	messages := []llm.Message{
-		llm.NewMessage("system", "You revise research documents based on user feedback. Keep the structure, incorporate the changes."),
-		llm.NewMessage("user", revisePrompt),
-	}
-
-	response, err := client.GetResponse(messages)
+	// Read change.md for context using absolute path
+	changeData, err := os.ReadFile(filepath.Join(worktreePath, state.StateDir, "change.md"))
 	if err != nil {
-		return fmt.Errorf("AI revision failed: %w", err)
+		return fmt.Errorf("failed to read change.md: %w", err)
 	}
 
-	fmt.Println("\n▶ Writing revised research...")
-
-	researchMD = []byte(extractMarkdown(response))
-
-	if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "research.md"), []byte(researchMD), 0644); err != nil {
-		return fmt.Errorf("failed to write research: %w", err)
+	response, err := client.GetResponse([]llm.Message{
+		llm.NewMessage("system", "You are adjusting research findings based on user feedback. Expand or redirect the research as needed. Output the complete updated research document."),
+		llm.NewMessage("user", fmt.Sprintf("## Current Research\n\n%s\n\n## Change Request\n\n%s\n\n## Feedback\n\n%s\n\nPlease adjust the research based on this feedback. Output the complete updated research document.", string(researchData), string(changeData), feedback)),
+	})
+	if err != nil {
+		return err
 	}
 
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Println("\n✓ Research revised!")
-	fmt.Printf("\nFeedback: %s\n", render.Truncate(feedback, 80))
-	fmt.Println("\nReview: cat .maia/.generated/research.md")
-	fmt.Println("Plan:   maia plan")
-	fmt.Println("Steer:  maia steer --research 'more feedback'")
+	// Write updated research using absolute path
+	if err := os.WriteFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "research.md"), []byte(response), 0644); err != nil {
+		return fmt.Errorf("failed to write updated research: %w", err)
+	}
 
 	return nil
 }
 
 func init() {
-	steerCmd.Flags().BoolVar(&steerResearch, "research", false, "Revise research instead of plan")
 	rootCmd.AddCommand(steerCmd)
 }

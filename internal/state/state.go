@@ -8,21 +8,23 @@ import (
 	"strings"
 )
 
-const StateDir = ".maia"
-const GeneratedDir = ".generated"
+const (
+	StateDir    = ".maia"
+	GeneratedDir = ".maia/.generated"
+)
 
-// GetGeneratedDir returns .maia/.generated/
+// GetGeneratedDir returns the path to the .generated directory
 func GetGeneratedDir() string {
-	return filepath.Join(StateDir, GeneratedDir)
+	return filepath.Join(StateDir, ".generated")
 }
 
-// GetWorktreesDir returns ~/.maia/worktrees/
+// GetWorktreesDir returns the global worktrees directory (~/.maia/worktrees)
 func GetWorktreesDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".maia", "worktrees")
 }
 
-// GetRepoWorktreeDir returns ~/.maia/worktrees/<repo>/
+// GetRepoWorktreeDir returns the worktree directory for the current repo
 func GetRepoWorktreeDir() (string, error) {
 	repoName, err := GetRepoName()
 	if err != nil {
@@ -45,6 +47,68 @@ func GetRepoName() (string, error) {
 // EnsureDirs creates the .maia/.generated/ directory structure
 func EnsureDirs() error {
 	return os.MkdirAll(GetGeneratedDir(), 0755)
+}
+
+// --- Path-aware variants (work from any directory) ---
+
+// HasWorktreeIn checks if .maia directory exists under dir.
+func HasWorktreeIn(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, StateDir))
+	return err == nil
+}
+
+// HasChangeFileIn checks if change.md exists under dir.
+func HasChangeFileIn(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, StateDir, "change.md"))
+	return err == nil
+}
+
+// HasResearchIn checks if research.md exists under dir.
+func HasResearchIn(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, GetGeneratedDir(), "research.md"))
+	return err == nil
+}
+
+// HasPlanIn checks if plan.md exists under dir.
+func HasPlanIn(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, GetGeneratedDir(), "plan.md"))
+	return err == nil
+}
+
+// GetStatusIn reads the status from plan.md or change.md frontmatter under dir.
+func GetStatusIn(dir string) (string, error) {
+	// Check plan.md first
+	if data, err := os.ReadFile(filepath.Join(dir, GetGeneratedDir(), "plan.md")); err == nil {
+		if status := extractFrontmatterField(string(data), "status"); status != "" {
+			return status, nil
+		}
+	}
+
+	// Fall back to change.md
+	if data, err := os.ReadFile(filepath.Join(dir, StateDir, "change.md")); err == nil {
+		if status := extractFrontmatterField(string(data), "status"); status != "" {
+			return status, nil
+		}
+	}
+
+	return "new", nil
+}
+
+// SetStatusIn updates the status in plan.md (or change.md) under dir.
+func SetStatusIn(dir, status string) error {
+	// Try to update plan.md first
+	planPath := filepath.Join(dir, GetGeneratedDir(), "plan.md")
+	if _, err := os.Stat(planPath); err == nil {
+		return updateFrontmatterField(planPath, "status", status)
+	}
+
+	// Fall back to change.md
+	changePath := filepath.Join(dir, StateDir, "change.md")
+	if _, err := os.Stat(changePath); err == nil {
+		return updateFrontmatterField(changePath, "status", status)
+	}
+
+	return fmt.Errorf("no plan.md or change.md found")
 }
 
 // EnsureGlobalDir creates ~/.maia/worktrees/

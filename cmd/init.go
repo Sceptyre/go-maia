@@ -13,7 +13,7 @@ import (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init",
+	Use:   "init [slug]",
 	Short: "Research and analyze codebase",
 	Long: `Scans the codebase and web to discover:
   - Project structure and patterns
@@ -22,20 +22,47 @@ var initCmd = &cobra.Command{
   - Dependencies and relationships
   - Existing conventions to follow
 
-Output is saved to .maia/.generated/research.md for use by 'maia plan'.`,
+Output is saved to .maia/.generated/research.md for use by 'maia plan'.
+
+Without a slug, runs in the current worktree.
+With a slug, runs from the parent branch against the specified worktree.
+
+Examples:
+  maia init              # Research current worktree
+  maia init my-slug      # Research 'my-slug' from parent branch`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Verify we're in a maia worktree
-		if !state.HasWorktree() {
-			return fmt.Errorf("not in a maia worktree. Run 'maia new' first, then cd to the worktree")
+		var worktreePath string
+
+		if len(args) > 0 {
+			// Slug provided — resolve from parent repo
+			resolved, err := state.ValidateWorktreeExists(args[0])
+			if err != nil {
+				return err
+			}
+			worktreePath = resolved
+		} else {
+			// No slug — assume CWD is a worktree
+			if !state.HasWorktree() {
+				return fmt.Errorf("not in a maia worktree. Provide a slug: maia init <slug>")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			worktreePath = cwd
 		}
 
-		// Check for change.md
-		if !state.HasChangeFile() {
-			return fmt.Errorf("change.md not found. Run 'maia new' first")
+		// Verify worktree has required files
+		if !state.HasWorktreeIn(worktreePath) {
+			return fmt.Errorf("not a maia worktree: %s", worktreePath)
+		}
+		if !state.HasChangeFileIn(worktreePath) {
+			return fmt.Errorf("change.md not found in worktree. Run 'maia new' first")
 		}
 
-		// Read change.md
-		changeMD, err := os.ReadFile(filepath.Join(state.StateDir, "change.md"))
+		// Read change.md using absolute path
+		changeMD, err := os.ReadFile(filepath.Join(worktreePath, state.StateDir, "change.md"))
 		if err != nil {
 			return fmt.Errorf("failed to read change.md: %w", err)
 		}
@@ -54,16 +81,14 @@ Output is saved to .maia/.generated/research.md for use by 'maia plan'.`,
 			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")
 		}
 
-		cwd, _ := os.Getwd()
-
 		fmt.Printf("\n▶ Orchestrating research...")
 		fmt.Printf("\n  Model: %s", client.Model)
-		fmt.Printf("\n  Working directory: %s\n", cwd)
+		fmt.Printf("\n  Working directory: %s\n", worktreePath)
 
-		// Run orchestrator with subagents
+		// Run orchestrator with subagents — worktreePath is the working directory
 		fmt.Println("\n▶ Starting research agents...\n")
 
-		research, err := llm.RunOrchestratorWithReformat(changeContent, cwd)
+		research, err := llm.RunOrchestratorWithReformat(changeContent, worktreePath)
 		if err != nil {
 			return fmt.Errorf("AI research failed: %w", err)
 		}
@@ -83,19 +108,19 @@ Output is saved to .maia/.generated/research.md for use by 'maia plan'.`,
 		// Extract just the markdown
 		researchMD := extractMarkdown(research)
 
-		// Write research.md
-		if err := os.WriteFile(filepath.Join(state.GetGeneratedDir(), "research.md"), []byte(researchMD), 0644); err != nil {
+		// Write research.md using absolute path
+		if err := os.WriteFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "research.md"), []byte(researchMD), 0644); err != nil {
 			return fmt.Errorf("failed to write research: %w", err)
 		}
 
-		// Update status
-		if err := state.SetStatus("analyzed"); err != nil {
+		// Update status using path-aware helper
+		if err := state.SetStatusIn(worktreePath, "analyzed"); err != nil {
 			return err
 		}
 
 		fmt.Println(strings.Repeat("─", 60))
 		fmt.Println("\n✓ Research complete!")
-		fmt.Printf("\nOutput: .maia/.generated/research.md\n")
+		fmt.Printf("\nOutput: %s\n", filepath.Join(worktreePath, state.GetGeneratedDir(), "research.md"))
 		fmt.Println("\nNext step: maia plan")
 
 		return nil

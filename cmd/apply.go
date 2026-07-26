@@ -20,26 +20,57 @@ var (
 )
 
 var applyCmd = &cobra.Command{
-	Use:   "apply",
+	Use:   "apply [slug]",
 	Short: "Execute planned changes",
 	Long: `Execute the implementation plan phase by phase.
 
 Use --phase N to execute only a specific phase.
-Use --dry-run to preview without making changes.`,
+Use --dry-run to preview without making changes.
+
+Without a slug, runs in the current worktree.
+With a slug, runs from the parent branch against the specified worktree.
+
+Examples:
+  maia apply              # Execute plan in current worktree
+  maia apply my-slug      # Execute plan for 'my-slug' from parent branch`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if !state.HasWorktree() {
-			return fmt.Errorf("not in a maia worktree. Run 'maia new' first")
+		var worktreePath string
+
+		if len(args) > 0 {
+			// Slug provided — resolve from parent repo
+			resolved, err := state.ValidateWorktreeExists(args[0])
+			if err != nil {
+				return err
+			}
+			worktreePath = resolved
+		} else {
+			// No slug — assume CWD is a worktree
+			if !state.HasWorktree() {
+				return fmt.Errorf("not in a maia worktree. Provide a slug: maia apply <slug>")
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			worktreePath = cwd
 		}
-		if !state.HasPlan() {
+
+		// Check prerequisites using path-aware helpers
+		if !state.HasWorktreeIn(worktreePath) {
+			return fmt.Errorf("not a maia worktree: %s", worktreePath)
+		}
+		if !state.HasPlanIn(worktreePath) {
 			return fmt.Errorf("plan.md not found. Run 'maia plan' first")
 		}
 
-		status, _ := state.GetStatus()
+		status, _ := state.GetStatusIn(worktreePath)
 		if status != "planned" && status != "applying" {
 			return fmt.Errorf("plan not ready (status: %s). Run 'maia plan' first", status)
 		}
 
-		planMD, err := os.ReadFile(filepath.Join(state.GetGeneratedDir(), "plan.md"))
+		// Read plan.md using absolute path
+		planMD, err := os.ReadFile(filepath.Join(worktreePath, state.GetGeneratedDir(), "plan.md"))
 		if err != nil {
 			return fmt.Errorf("failed to read plan: %w", err)
 		}
@@ -49,24 +80,23 @@ Use --dry-run to preview without making changes.`,
 		fmt.Println("═══════════════════════════════════════════════════════════════")
 		fmt.Println(strings.Repeat("─", 60))
 
-		state.SetStatus("applying")
+		// Update status using path-aware helper
+		state.SetStatusIn(worktreePath, "applying")
 
 		client := llm.NewClient()
 		if client.APIKey == "" {
 			return fmt.Errorf("API key not configured")
 		}
 
-		cwd, _ := os.Getwd()
-
 		fmt.Println("\n▶ Starting implementation...\n")
 
-		result, err := runApplyOrchestrator(client, string(planMD), cwd, phase, dryRun)
+		result, err := runApplyOrchestrator(client, string(planMD), worktreePath, phase, dryRun)
 		if err != nil {
-			state.SetStatus("error")
+			state.SetStatusIn(worktreePath, "error")
 			return fmt.Errorf("implementation failed: %w", err)
 		}
 
-		state.SetStatus("applied")
+		state.SetStatusIn(worktreePath, "applied")
 
 		fmt.Println(strings.Repeat("─", 60))
 		fmt.Println("\n✓ Implementation complete!")

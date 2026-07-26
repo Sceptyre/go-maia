@@ -93,8 +93,8 @@ type Choice struct {
 }
 
 type ResponseMessage struct {
-	Role    string     `json:"role"`
-	Content string     `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -132,7 +132,7 @@ func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 		Model:       c.Model,
 		Messages:    messages,
 		Temperature: 0.7,
-		MaxTokens:   4096,
+		MaxTokens:   9182,
 	}
 
 	// Only include tools if provided (some providers don't support them)
