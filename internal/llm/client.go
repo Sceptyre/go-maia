@@ -74,6 +74,14 @@ type ToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
+// ResponseMessage represents a message in an API response.
+// Unlike Message (used for requests), Content is a plain string (API never sends null).
+type ResponseMessage struct {
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
 // ChatRequest is the request body for the chat completions API
 type ChatRequest struct {
 	Model       string    `json:"model"`
@@ -91,13 +99,13 @@ type ChatResponse struct {
 }
 
 type Choice struct {
-	Message ResponseMessage `json:"message"`
+	Message      ResponseMessage `json:"message"`
+	FinishReason string          `json:"finish_reason"` // "stop", "length", "tool_calls", etc.
 }
 
-type ResponseMessage struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+// Truncated returns true if the response was cut off due to token limits.
+func (c Choice) Truncated() bool {
+	return c.FinishReason == "length"
 }
 
 // NewClient creates a new LLM client
@@ -138,11 +146,22 @@ func NewClient() *Client {
 
 // Chat sends a chat completion request
 func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
+	return c.ChatWithMaxTokens(messages, tools, 0)
+}
+
+// ChatWithMaxTokens sends a chat completion request with an optional max token limit.
+// If maxTokens is 0, the client's default MaxTokens is used.
+func (c *Client) ChatWithMaxTokens(messages []Message, tools []Tool, maxTokens int) (*ChatResponse, error) {
+	effectiveMax := c.MaxTokens
+	if maxTokens > 0 {
+		effectiveMax = maxTokens
+	}
+
 	request := ChatRequest{
 		Model:       c.Model,
 		Messages:    messages,
 		Temperature: 0.7,
-		MaxTokens:   c.MaxTokens,
+		MaxTokens:   effectiveMax,
 	}
 
 	// Only include tools if provided (some providers don't support them)
@@ -200,13 +219,23 @@ func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 
 // GetResponse sends a request and returns just the text response
 func (c *Client) GetResponse(messages []Message) (string, error) {
-	resp, err := c.Chat(messages, nil)
+	return c.GetResponseWithMaxTokens(messages, 0)
+}
+
+// GetResponseWithMaxTokens sends a request and returns just the text response
+// with an optional max token limit. If maxTokens is 0, the client default is used.
+func (c *Client) GetResponseWithMaxTokens(messages []Message, maxTokens int) (string, error) {
+	resp, err := c.ChatWithMaxTokens(messages, nil, maxTokens)
 	if err != nil {
 		return "", err
 	}
 
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no response from model")
+	}
+
+	if resp.Choices[0].Truncated() {
+		return "", fmt.Errorf("response truncated: the model's output exceeded the token limit")
 	}
 
 	return resp.Choices[0].Message.Content, nil
@@ -260,6 +289,10 @@ func (c *Client) GetResponseWithToolsContext(
 
 		// No tool calls — return final answer.
 		if len(choice.Message.ToolCalls) == 0 {
+			if choice.Truncated() {
+				return choice.Message.Content, messages,
+					fmt.Errorf("response truncated at token limit (partial content returned)")
+			}
 			return choice.Message.Content, messages, nil
 		}
 
