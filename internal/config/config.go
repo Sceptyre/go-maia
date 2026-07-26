@@ -19,6 +19,9 @@ type Config struct {
 	// Web search
 	BraveAPIKey string `json:"brave_api_key"`
 
+	// MaxTokens limits the number of tokens in LLM responses. Defaults to 16384 if unset.
+	MaxTokens int `json:"max_tokens,omitempty"`
+
 	// Custom settings
 	Custom map[string]string `json:"custom,omitempty"`
 }
@@ -78,6 +81,10 @@ func Get(key string) string {
 		value = config.Model
 	case "brave_api_key":
 		value = config.BraveAPIKey
+	case "max_tokens":
+		if config.MaxTokens > 0 {
+			value = fmt.Sprintf("%d", config.MaxTokens)
+		}
 	default:
 		if config.Custom != nil {
 			value = config.Custom[key]
@@ -165,6 +172,8 @@ func envName(key string) string {
 		return "MAIA_MODEL"
 	case "brave_api_key":
 		return "BRAVE_API_KEY"
+	case "max_tokens":
+		return "MAIA_MAX_TOKENS"
 	}
 
 	// Convert snake_case to UPPER_SNAKE_CASE with MAIA_ prefix

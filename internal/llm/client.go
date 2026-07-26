@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ type Client struct {
 	BaseURL    string
 	APIKey     string
 	Model      string
+	MaxTokens  int
 	HTTPClient *http.Client
 }
 
@@ -114,12 +116,20 @@ func NewClient() *Client {
 		model = "gpt-4"
 	}
 
+	maxTokens := 16384
+	if mt := config.Get("max_tokens"); mt != "" {
+		if parsed, err := strconv.Atoi(mt); err == nil && parsed > 0 {
+			maxTokens = parsed
+		}
+	}
+
 	_ = cfg // ensure config is loaded
 
 	return &Client{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		BaseURL:   baseURL,
+		APIKey:    apiKey,
+		Model:     model,
+		MaxTokens: maxTokens,
 		HTTPClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
@@ -132,7 +142,7 @@ func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 		Model:       c.Model,
 		Messages:    messages,
 		Temperature: 0.7,
-		MaxTokens:   9182,
+		MaxTokens:   c.MaxTokens,
 	}
 
 	// Only include tools if provided (some providers don't support them)
