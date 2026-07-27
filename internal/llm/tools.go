@@ -280,48 +280,65 @@ type ToolCallResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// truncateToolResult caps a tool result at maxToolResultChars characters.
+func truncateToolResult(result string) string {
+	const maxToolResultChars = 50000
+	if len(result) > maxToolResultChars {
+		return result[:maxToolResultChars] + "\n[truncated: result exceeded 50KB]"
+	}
+	return result
+}
+
 // HandleToolCall processes a tool call and returns the result
 func HandleToolCall(call ToolCall, workDir string) (string, error) {
+	var result string
+	var err error
+
 	switch call.Function.Name {
 	case ToolNameReadFile:
 		var a readFileArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleReadFile(a, workDir)
+		result, err = handleReadFile(a, workDir)
 	case ToolNameEditFile:
 		var a editFileArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleEditFile(a, workDir)
+		result, err = handleEditFile(a, workDir)
 	case ToolNameWriteFile:
 		var a writeFileArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleWriteFile(a.Path, a.Content, workDir)
+		result, err = handleWriteFile(a.Path, a.Content, workDir)
 	case ToolNameListFiles:
 		var a listFilesArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleListFiles(a.Path, workDir)
+		result, err = handleListFiles(a.Path, workDir)
 	case ToolNameSearchFiles:
 		var a searchFilesArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleSearchFiles(a.Pattern, workDir)
+		result, err = handleSearchFiles(a.Pattern, workDir)
 	case ToolNameGrepContent:
 		var a grepContentArgs
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
+		if err = json.Unmarshal([]byte(call.Function.Arguments), &a); err != nil {
 			return "", fmt.Errorf("failed to parse arguments: %w", err)
 		}
-		return handleGrepContent(a.Query, a.Path, workDir)
+		result, err = handleGrepContent(a.Query, a.Path, workDir)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
+
+	if err != nil {
+		return "", err
+	}
+	return truncateToolResult(result), nil
 }
 
 func handleReadFile(a readFileArgs, workDir string) (string, error) {
@@ -347,6 +364,10 @@ func handleReadFile(a readFileArgs, workDir string) (string, error) {
 	if end <= 0 || end > totalLines {
 		end = totalLines
 	}
+	// Cap at 200 lines when end_line is not explicitly set
+	if a.EndLine == 0 && (end-start) > 199 {
+		end = start + 199
+	}
 	if start > totalLines {
 		return "", fmt.Errorf("start_line %d exceeds file length %d", start, totalLines)
 	}
@@ -358,6 +379,9 @@ func handleReadFile(a readFileArgs, workDir string) (string, error) {
 	var sb strings.Builder
 	for i, line := range selected {
 		sb.WriteString(fmt.Sprintf("%d\t%s\n", start+i, line))
+	}
+	if a.EndLine == 0 && totalLines > start+199 {
+		sb.WriteString("\n[truncated at 200 lines — use start_line/end_line for more]\n")
 	}
 	return sb.String(), nil
 }

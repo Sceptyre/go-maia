@@ -55,9 +55,9 @@ type PlanConfig struct {
 // DefaultPlanConfig returns sensible defaults.
 func DefaultPlanConfig() PlanConfig {
 	return PlanConfig{
-		OutlineMaxTokens:  4096,
-		PhaseMaxTokens:    0, // use client default (16384)
-		MaxPhaseArtifacts: 3,
+		OutlineMaxTokens:  16384,
+		PhaseMaxTokens:    65536,
+		MaxPhaseArtifacts: 2,
 	}
 }
 
@@ -321,7 +321,7 @@ func GeneratePhase(
 		NewMessage("user", phaseUserPrompt(changeContent, researchContent, outline, phaseIdx, priorPhaseSummaries)),
 	}
 
-	markdown, _, err := client.GetResponseWithTools(messages, ReadOnlyTools, toolHandler)
+	markdown, _, err := client.GetResponseWithTools(messages, ReadOnlyTools, toolHandler, cfg.PhaseMaxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("phase %d generation failed: %w", phase.Number, err)
 	}

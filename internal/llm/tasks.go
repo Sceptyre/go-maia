@@ -150,7 +150,7 @@ func RunOrchestrator(changeContent, workDir string) (string, error) {
 	taskTool := TaskTool(nil, nil)
 	messages := BuildOrchestratorMessages(changeContent)
 
-	response, _, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler)
+	response, _, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler, 0)
 	return response, err
 }
 
@@ -161,7 +161,7 @@ func RunOrchestratorWithReformat(changeContent, workDir string) (string, error) 
 	taskTool := TaskTool(nil, nil)
 	messages := BuildOrchestratorMessages(changeContent)
 
-	response, allMessages, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler)
+	response, allMessages, err := client.GetResponseWithTools(messages, []Tool{taskTool}, taskHandler, 0)
 	if err != nil {
 		return "", err
 	}

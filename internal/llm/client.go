@@ -243,24 +243,27 @@ func (c *Client) GetResponseWithMaxTokens(messages []Message, maxTokens int) (st
 
 // GetResponseWithTools sends a request with tools and handles tool calls.
 // Tool calls are executed concurrently for improved performance.
-// This is the backward-compatible entry point.
+// maxTokens limits the output token budget; 0 uses the client default.
 func (c *Client) GetResponseWithTools(
 	messages []Message,
 	tools []Tool,
 	toolHandler func(ToolCall) (string, error),
+	maxTokens int,
 ) (string, []Message, error) {
 	return c.GetResponseWithToolsContext(
-		context.Background(), messages, tools, toolHandler, DefaultConcurrentConfig())
+		context.Background(), messages, tools, toolHandler, DefaultConcurrentConfig(), maxTokens)
 }
 
 // GetResponseWithToolsContext sends a request with tools and handles
 // tool calls with context cancellation support and configurable concurrency.
+// maxTokens limits the output token budget; 0 uses the client default.
 func (c *Client) GetResponseWithToolsContext(
 	ctx context.Context,
 	messages []Message,
 	tools []Tool,
 	toolHandler func(ToolCall) (string, error),
 	config ConcurrentConfig,
+	maxTokens int,
 ) (string, []Message, error) {
 	for i := 0; i < 100; i++ {
 		// Check context before each LLM call.
@@ -270,7 +273,7 @@ func (c *Client) GetResponseWithToolsContext(
 		default:
 		}
 
-		resp, err := c.Chat(messages, tools)
+		resp, err := c.ChatWithMaxTokens(messages, tools, maxTokens)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n⚠ API error: %v\n", err)
 			if len(tools) > 0 {

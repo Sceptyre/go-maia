@@ -223,7 +223,7 @@ Report what you did.`,
 		llm.NewMessage("user", userPrompt),
 	}
 
-	response, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler)
+	response, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler, 0)
 	return response, err
 }
 

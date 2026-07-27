@@ -27,12 +27,12 @@ func (a *Agent) Run(userPrompt string) (string, error) {
 		NewMessage("user", userPrompt),
 	}
 
-	result, _, err := a.Client.GetResponseWithTools(messages, a.Tools, a.ToolHandler)
+	result, _, err := a.Client.GetResponseWithTools(messages, a.Tools, a.ToolHandler, 0)
 	return result, err
 }
 
 // RunWithContext executes the agent with conversation context
 func (a *Agent) RunWithContext(messages []Message) (string, error) {
-	result, _, err := a.Client.GetResponseWithTools(messages, a.Tools, a.ToolHandler)
+	result, _, err := a.Client.GetResponseWithTools(messages, a.Tools, a.ToolHandler, 0)
 	return result, err
 }
