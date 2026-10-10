@@ -74,7 +74,7 @@ function addProjectModal(ctx) {
   const err = h('div', { class: 'error-text' });
   mode.addEventListener('change', () => {
     const remote = mode.value === 'remote';
-    label.textContent = remote ? 'HTTPS, SSH, or SCP-style Git URL' : 'Absolute path to a git repository';
+    label.textContent = remote ? 'HTTPS, HTTP, SSH, or SCP-style Git URL' : 'Absolute path to a git repository';
     value.placeholder = remote ? 'https://github.com/owner/repo.git' : '/path/to/repo';
   });
   const add = async () => {
