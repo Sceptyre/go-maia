@@ -49,6 +49,7 @@
 - [How It Works](#-how-it-works)
 - [Examples](#-examples)
 - [Commands](#-commands)
+- [Web UI](#-web-ui)
 - [Worktree Structure](#worktree-structure)
 - [Built With](#-built-with)
 - [Contributing](#-contributing)
@@ -297,6 +298,7 @@ maia merge
 | `maia merge` | Merge the worktree branch back to main |
 | `maia cleanup` | Remove a worktree |
 | `maia config` | Show current configuration and value sources |
+| `maia web` | Start the local web UI |
 
 <details>
 <summary>Command Options</summary>
@@ -321,6 +323,30 @@ maia new -b develop "description"      # Create from a specific branch
 ```
 
 </details>
+
+## 🌐 Web UI
+
+Run `maia web` from inside a git repository to get a browser UI for the whole
+workflow — create change requests, edit `change.md`, review rendered research
+and plans, run AI operations with live streaming output, inspect diffs, and
+merge or clean up:
+
+```bash
+maia web                # http://127.0.0.1:7878
+maia web --port 3000    # custom port
+maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
+```
+
+- **Sidebar** — all change requests for the repo with live status badges
+  (`new → analyzed → planned → applying → applied`)
+- **Tabs** — edit `change.md`, read rendered `research.md`/`plan.md`, view the
+  worktree diff, and watch command output stream in the console (SSE)
+- **Actions** — Research, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup;
+  one AI command runs at a time, cancelable from the console
+- **Security** — binds to `127.0.0.1` only by default. A non-loopback `--addr`
+  requires `--token`; the API rejects requests without it (`?token=...` or
+  `Authorization: Bearer`). Static assets are served unauthenticated so the
+  page can load; the app prompts for the token on the first API call.
 
 ## 📂 Worktree Structure
 
