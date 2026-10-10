@@ -179,12 +179,17 @@ function buildBody(mode) {
         title: 'GitHub issues', indent: true,
         active: p[3] === 'issues',
       }));
-      // change requests of the active project (lazy, cached)
       const crBox = h('div', { class: 'sb-crs' }, h('div', { class: 'sb-crs-loading muted tiny' }, '…'));
-      list.appendChild(crBox);
+      list.appendChild(h('section', { class: 'sb-group', 'aria-label': 'Change requests' },
+        h('div', { class: 'sb-group-title', role: 'heading', 'aria-level': '3' }, 'Change requests'),
+        crBox));
       fetchCRs(proj.id).then((crs) => {
         if (!crBox.isConnected) return;
         clear(crBox);
+        if (!crs.length) {
+          crBox.appendChild(h('div', { class: 'sb-cr-empty muted tiny' }, 'No change requests'));
+          return;
+        }
         for (const cr of crs) {
           crBox.appendChild(navRow({
             to: `#/p/${proj.id}/cr/${cr.slug}/docs`, label: cr.slug,

@@ -112,8 +112,19 @@ body.sb-collapsed #sidebar { width: 56px; }
   padding: 2px 8px 8px;
 }
 .sb-list .sb-empty { padding: 8px 10px; }
+.sb-group {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-top: 5px; padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+.sb-group-title {
+  padding: 4px 10px 2px 36px;
+  color: var(--muted); font-size: 11px; line-height: 16px;
+  font-weight: 650; letter-spacing: .045em; text-transform: uppercase;
+}
 .sb-crs { display: flex; flex-direction: column; gap: 2px; }
-.sb-crs-loading { padding: 2px 10px 4px 32px; }
+.sb-crs-loading { padding: 2px 10px 4px 36px; }
+.sb-cr-empty { padding: 3px 10px 7px 36px; font-size: 12px; }
 .sb-foot {
   flex: none;
   display: flex; flex-direction: column; gap: 6px;
