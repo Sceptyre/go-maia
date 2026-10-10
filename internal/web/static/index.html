@@ -1,106 +1,31 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>maia</title>
-<link rel="stylesheet" href="/styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>maia</title>
+  <meta name="description" content="Local web UI for the maia AI code change workflow">
+  <meta name="theme-color" content="#0f1117">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<header>
-  <div class="brand">maia</div>
-  <div id="repo-name" class="repo"></div>
-  <div id="running-pill" class="pill hidden">● <span id="running-label"></span></div>
-  <div class="spacer"></div>
-  <div id="key-missing" class="warn hidden">no API key configured</div>
-  <div id="model-badge" class="badge"></div>
-</header>
-
-<div class="layout">
-  <aside>
-    <div class="side-head">
-      <span>Change requests</span>
-      <button id="btn-new" class="icon-btn" title="New change request">＋</button>
-    </div>
-    <ul id="wt-list"></ul>
-    <div id="empty-list" class="empty hidden">No change requests yet.<br><br>Click <b>＋</b> to describe a change.</div>
-  </aside>
-
-  <main>
-    <div id="welcome" class="welcome">
-      <h1>maia</h1>
-      <p>AI-powered code change planning and execution.<br>
-      Select a change request, or create a new one with <b>＋</b>.</p>
-    </div>
-
-    <div id="detail" class="hidden">
-      <div class="toolbar">
-        <div class="title-block">
-          <h2 id="d-slug"></h2>
-          <span id="d-status" class="status"></span>
-        </div>
-        <div class="actions">
-          <button data-act="init">Research</button>
-          <button data-act="plan">Plan</button>
-          <button data-act="dryrun">Dry run</button>
-          <button data-act="apply" class="primary">Apply</button>
-          <span class="sep"></span>
-          <button data-act="commit">Commit…</button>
-          <button data-act="merge">Merge…</button>
-          <button data-act="cleanup" class="danger">Cleanup…</button>
-        </div>
-      </div>
-
-      <nav class="tabs">
-        <button data-tab="change" class="active">Change</button>
-        <button data-tab="research">Research</button>
-        <button data-tab="plan">Plan</button>
-        <button data-tab="diff">Diff</button>
-        <button data-tab="console">Console</button>
-      </nav>
-
-      <div id="steer-bar" class="steer-bar hidden">
-        <input id="steer-input" placeholder="Steer the plan — e.g. use bcrypt, not argon2  (Enter to send)">
-        <button id="btn-steer">Steer</button>
-      </div>
-
-      <section id="tab-change" class="panel">
-        <div class="editor-head">
-          <span class="hint">.maia/change.md — your goal and requirements</span>
-          <span id="save-state" class="hint"></span>
-          <button id="btn-save" class="primary">Save</button>
-        </div>
-        <textarea id="change-editor" spellcheck="false" placeholder="## Goal&#10;What should this change accomplish?"></textarea>
-      </section>
-
-      <section id="tab-research" class="panel doc hidden"><div class="doc-empty">No research yet — run <b>Research</b> (<code>maia init</code>).</div></section>
-      <section id="tab-plan" class="panel doc hidden"><div class="doc-empty">No plan yet — run <b>Research</b> first, then <b>Plan</b> (<code>maia plan</code>).</div></section>
-
-      <section id="tab-diff" class="panel diff hidden"><div class="doc-empty">No changes.</div></section>
-
-      <section id="tab-console" class="panel console hidden">
-        <div class="console-bar">
-          <select id="job-select"></select>
-          <button id="btn-cancel" class="danger">Cancel</button>
-        </div>
-        <pre id="console-out"></pre>
-      </section>
-    </div>
-  </main>
-</div>
-
-<div id="modal-backdrop" class="backdrop hidden">
-  <div class="modal">
-    <h3 id="modal-title"></h3>
-    <p id="modal-text" class="hidden"></p>
-    <input id="modal-input" class="hidden">
-    <div class="modal-actions">
-      <button id="modal-cancel">Cancel</button>
-      <button id="modal-ok" class="primary">OK</button>
-    </div>
-  </div>
-</div>
-
-<script src="/app.js"></script>
+  <header id="topbar">
+    <a class="brand" href="#/">maia</a>
+    <span class="muted tiny topsub">change requests</span>
+    <span class="spacer"></span>
+    <a class="btn btn-tiny" href="#/" title="Projects">Projects</a>
+    <a class="btn btn-tiny" href="#/settings" title="Settings">⚙</a>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+  <main id="view"></main>
+  <noscript>
+    <p style="padding:2rem">maia's web UI requires JavaScript.</p>
+  </noscript>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

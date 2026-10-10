@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
@@ -113,8 +114,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.handleJobEvents)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
 
+	// Go sniffs .webmanifest as text/plain; register the PWA type so install
+	// prompts work in strict browsers.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+
 	static, _ := fs.Sub(staticFiles, "static")
-	mux.Handle("GET /", http.FileServerFS(static))
+	mux.Handle("GET /", noCache(http.FileServerFS(static)))
 
 	// API requests require the token; static assets do not — the page itself
 	// is not secret, and <script>/<link> tags cannot carry the token. The JS
@@ -124,6 +129,15 @@ func (s *Server) Handler() http.Handler {
 			"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
 		mux.ServeHTTP(w, r)
 	}))
+}
+
+// noCache revalidates every static request — edits to the UI are picked up
+// on reload without cache-busting query params.
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // auth enforces the bearer/query token when one is configured.
@@ -198,7 +212,8 @@ func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if job.isDone() {
-		writeEvent(-1, `{"type":"end"}`)
+		b, _ := json.Marshal(JobEvent{Type: "end", Data: job.Status})
+		writeEvent(-1, string(b))
 		return
 	}
 

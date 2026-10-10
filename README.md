@@ -326,10 +326,10 @@ maia new -b develop "description"      # Create from a specific branch
 
 ## 🌐 Web UI
 
-Run `maia web` from inside a git repository to get a browser UI for the whole
-workflow — create change requests, edit `change.md`, review rendered research
-and plans, run AI operations with live streaming output, inspect diffs, and
-merge or clean up:
+`maia web` runs a local server that manages **multiple projects** (git
+repositories). It auto-registers the repository you launch it from; add more
+from the dashboard. It's a progressive web app (installable, works offline for
+the cached shell) with a mobile-first layout.
 
 ```bash
 maia web                # http://127.0.0.1:7878
@@ -337,12 +337,21 @@ maia web --port 3000    # custom port
 maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
 ```
 
-- **Sidebar** — all change requests for the repo with live status badges
-  (`new → analyzed → planned → applying → applied`)
-- **Tabs** — edit `change.md`, read rendered `research.md`/`plan.md`, view the
-  worktree diff, and watch command output stream in the console (SSE)
-- **Actions** — Research, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup;
-  one AI command runs at a time, cancelable from the console
+- **Projects dashboard** — every supported repository with its path, open
+  change-request count, and last GitHub scan
+- **Change requests** — each repo's CRs with status badges; the **Issues**
+  screen auto-detects open GitHub issues labeled `maia` and imports one as a
+  worktree + `change.md` (lazy materialization, capped by
+  `max_active_worktrees`)
+- **CR detail** — Docs (edit `change.md`, read rendered `research.md`/`plan.md`),
+  Diff (worktree changes), and Run (streaming job console over SSE)
+- **Settings** — one master config (`~/.maia/web.json`) for the server, global
+  defaults (worktree cap, detection labels, import mode, poll interval), and
+  `~/.maia/config.json` (model, API keys) — editable from the admin dashboard
+- **Actions** — Init, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup, Draft
+  PR; one AI command runs at a time, cancelable from the console
+- **GitHub** — auth via the `gh` CLI, then `GH_TOKEN`/`GITHUB_TOKEN`, then the
+  Settings token; draft PRs are opened from the browser
 - **Security** — binds to `127.0.0.1` only by default. A non-loopback `--addr`
   requires `--token`; the API rejects requests without it (`?token=...` or
   `Authorization: Bearer`). Static assets are served unauthenticated so the
