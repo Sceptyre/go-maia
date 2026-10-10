@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/sceptyre/maia/internal/web"
 	"github.com/spf13/cobra"
@@ -23,9 +20,11 @@ var webCmd = &cobra.Command{
 	Short: "Start the web UI",
 	Long: `Start a local web UI for maia.
 
-Run it from inside a git repository, then open the printed URL to manage
-change requests: edit change.md, review research and plan documents, run
-init/plan/steer/apply with live output, inspect diffs, and merge or clean up.
+The server manages multiple projects (git repositories): it auto-registers
+the current repository, and more can be added from the dashboard. Use it to
+create change requests, edit change.md, review research and plan documents,
+run AI operations with live output, inspect diffs, import GitHub issues as
+change requests, open draft PRs, and merge or clean up.
 
 By default it binds to 127.0.0.1 — do not expose it publicly without a token.
 
@@ -35,21 +34,12 @@ Examples:
   maia web --addr 0.0.0.0 --token my-secret`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := gitTopLevel()
-		if err != nil {
-			return err
-		}
-		// State helpers resolve the repo from the working directory.
-		if err := os.Chdir(root); err != nil {
-			return err
-		}
-
 		loopback := isLoopback(webAddr)
 		if !loopback && webToken == "" {
 			return fmt.Errorf("--token is required when binding to a non-loopback address")
 		}
 
-		srv := web.New(root, webToken)
+		srv := web.New(webToken, webAddr, webPort)
 
 		addr := fmt.Sprintf("%s:%d", webAddr, webPort)
 		url := fmt.Sprintf("http://%s:%d/", webAddr, webPort)
@@ -67,14 +57,6 @@ Examples:
 		}
 		return http.Serve(ln, srv.Handler())
 	},
-}
-
-func gitTopLevel() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("not inside a git repository — run 'maia web' from your project")
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 func isLoopback(host string) bool {

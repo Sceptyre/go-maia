@@ -7,9 +7,9 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sceptyre/maia/internal/config"
@@ -18,49 +18,97 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
-// Server serves the maia web UI and its JSON/SSE API.
+// Server serves the maia web UI and its JSON/SSE API. It is not bound to a
+// single repository: projects live in the registry and are addressed by id.
 type Server struct {
-	RepoRoot     string
-	RepoName     string
-	Jobs         *JobManager
-	Token        string
-	config       configInfo
-	worktreesDir string
+	Jobs     *JobManager
+	Token    string
+	Addr     string
+	Port     int
+	Version  string
+	registry *RegistryStore
+
+	cfgMu  sync.RWMutex
+	config configInfo
 }
 
-// New builds a server for the repository at repoRoot. token != "" requires
-// auth on every request (query param `token` or `Authorization: Bearer`).
-func New(repoRoot, token string) *Server {
+// New builds the server. token != "" requires auth on API requests (query
+// param `token` or `Authorization: Bearer`). The repo the process runs in is
+// auto-registered as a project (if any).
+func New(token, addr string, port int) *Server {
 	s := &Server{
-		RepoRoot:     repoRoot,
-		RepoName:     filepath.Base(repoRoot),
-		Jobs:         NewJobManager(repoRoot),
-		Token:        token,
-		worktreesDir: worktreesDirFor(repoRoot),
+		Jobs:     NewJobManager(),
+		Token:    token,
+		Addr:     addr,
+		Port:     port,
+		Version:  "2.0.0-dev",
+		registry: NewRegistryStore(),
 	}
+	s.config = snapshotConfig()
+	s.startPoller()
+	if cwd, err := os.Getwd(); err == nil {
+		if out, err := runGitIn(cwd, "rev-parse", "--show-toplevel"); err == nil {
+			if root := strings.TrimSpace(string(out)); root != "" {
+				s.registry.AddProject(root)
+			}
+		}
+	}
+	return s
+}
 
-	// Snapshot config once: resolving {cmd:...} secrets may run commands.
+// snapshotConfig resolves effective config (subprocess-backed secrets may run
+// commands, so callers should not invoke it per-request).
+func snapshotConfig() configInfo {
 	cfg, _ := config.Load()
-	s.config = configInfo{
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return configInfo{
 		Model:     config.Get("model"),
 		BaseURL:   config.Get("openai_base_url"),
 		MaxTokens: cfg.MaxTokens,
 		HasAPIKey: config.Get("openai_api_key") != "",
 		HasBrave:  config.Get("brave_api_key") != "",
 	}
-	return s
+}
+
+func (s *Server) currentConfig() configInfo {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.config
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	// Shell bootstrap + admin settings
 	mux.HandleFunc("GET /api/state", s.handleState)
-	mux.HandleFunc("GET /api/worktrees", s.handleListWorktrees)
-	mux.HandleFunc("POST /api/worktrees", s.handleRun)
-	mux.HandleFunc("GET /api/worktrees/{slug}/doc/{doc}", s.handleGetDoc)
-	mux.HandleFunc("PUT /api/worktrees/{slug}/doc/{doc}", s.handlePutDoc)
-	mux.HandleFunc("GET /api/worktrees/{slug}/diff", s.handleDiff)
-	mux.HandleFunc("POST /api/jobs", s.handleRun)
+	mux.HandleFunc("GET /api/settings", s.handleSettings)
+	mux.HandleFunc("PUT /api/settings", s.handleSettings)
+
+	// Projects (the supported repos)
+	mux.HandleFunc("GET /api/projects", s.handleListProjects)
+	mux.HandleFunc("POST /api/projects", s.handleAddProject)
+	mux.HandleFunc("GET /api/projects/{pid}", s.handleGetProject)
+	mux.HandleFunc("PUT /api/projects/{pid}", s.handleUpdateProject)
+	mux.HandleFunc("DELETE /api/projects/{pid}", s.handleDeleteProject)
+
+	// Project-scoped workflow
+	mux.HandleFunc("GET /api/projects/{pid}/worktrees", s.handleListWorktrees)
+	mux.HandleFunc("GET /api/projects/{pid}/worktrees/{slug}/doc/{doc}", s.handleGetDoc)
+	mux.HandleFunc("PUT /api/projects/{pid}/worktrees/{slug}/doc/{doc}", s.handlePutDoc)
+	mux.HandleFunc("GET /api/projects/{pid}/worktrees/{slug}/diff", s.handleDiff)
+	mux.HandleFunc("POST /api/projects/{pid}/jobs", s.handleRun)
+
+	// GitHub issues (detected change requests) — implemented in issues.go
+	mux.HandleFunc("GET /api/projects/{pid}/issues", s.handleListIssues)
+	mux.HandleFunc("POST /api/projects/{pid}/issues/scan", s.handleScanIssues)
+	mux.HandleFunc("POST /api/projects/{pid}/issues/{num}/import", s.handleImportIssue)
+
+	// Write-back
+	mux.HandleFunc("POST /api/projects/{pid}/pull-requests", s.handleCreatePR)
+
+	// Global job queue
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.handleJobEvents)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
@@ -182,11 +230,4 @@ func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 func eventJSON(ev JobEvent) string {
 	b, _ := json.Marshal(ev)
 	return string(b)
-}
-
-// worktreesDirFor mirrors state.GetRepoWorktreeDir but for an explicit repo
-// root, so the server does not depend on the process working directory.
-func worktreesDirFor(repoRoot string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".maia", "worktrees", filepath.Base(repoRoot))
 }

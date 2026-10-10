@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sceptyre/maia/internal/state"
 )
@@ -33,7 +33,7 @@ func decodeBody(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// --- State ---
+// --- State bootstrap ---
 
 type configInfo struct {
 	Model     string `json:"model"`
@@ -43,16 +43,62 @@ type configInfo struct {
 	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
+// projectSummary is the dashboard card payload.
+type projectSummary struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Path       string         `json:"path"`
+	BaseBranch string         `json:"base_branch,omitempty"`
+	AddedAt    time.Time      `json:"added_at"`
+	LastOpened time.Time      `json:"last_opened,omitempty"`
+	Github     GithubSettings `json:"github"`
+	CRCount    int            `json:"cr_count"`
+	Statuses   map[string]int `json:"statuses"`
+}
+
+func summarize(p *Project) projectSummary {
+	count, statuses := projectCRStats(p.Path)
+	return projectSummary{
+		ID: p.ID, Name: p.Name, Path: p.Path, BaseBranch: p.BaseBranch,
+		AddedAt: p.AddedAt, LastOpened: p.LastOpened, Github: p.Github,
+		CRCount: count, Statuses: statuses,
+	}
+}
+
+// projectCRStats counts a project's change requests by status.
+func projectCRStats(repoRoot string) (int, map[string]int) {
+	statuses := map[string]int{}
+	slugs, err := state.ListWorktreesIn(repoRoot)
+	if err != nil {
+		return 0, statuses
+	}
+	for _, slug := range slugs {
+		status := "new"
+		if info, err := readWorktreeInfo(repoRoot, slug); err == nil && info.Status != "" {
+			status = info.Status
+		}
+		statuses[status]++
+	}
+	return len(slugs), statuses
+}
+
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	reg := s.registry.Get()
+	projects := make([]projectSummary, 0, len(reg.Projects))
+	for i := range reg.Projects {
+		projects = append(projects, summarize(&reg.Projects[i]))
+	}
 	running, hasRunning := s.Jobs.Running()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"repo": map[string]string{
-			"name": s.RepoName,
-			"root": s.RepoRoot,
+		"ui":          reg.UI,
+		"defaults":    reg.Defaults,
+		"config":      s.currentConfig(),
+		"projects":    projects,
+		"running_job": jobOrNil(hasRunning, running),
+		"server": map[string]any{
+			"version": s.Version,
+			"port":    s.Port,
 		},
-		"worktrees_dir": s.worktreesDir,
-		"config":        s.config,
-		"running_job":   jobOrNil(hasRunning, running),
 	})
 }
 
@@ -63,7 +109,126 @@ func jobOrNil(has bool, j JobSummary) any {
 	return j
 }
 
-// --- Worktrees ---
+// --- Projects ---
+
+// projectFrom resolves the {pid} route value to a registered project.
+func (s *Server) projectFrom(w http.ResponseWriter, r *http.Request) (*Project, bool) {
+	p, ok := s.registry.Get().Find(r.PathValue("pid"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "project not found")
+		return nil, false
+	}
+	return p, true
+}
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	reg := s.registry.Get()
+	out := make([]projectSummary, 0, len(reg.Projects))
+	for i := range reg.Projects {
+		out = append(out, summarize(&reg.Projects[i]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAddProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := decodeBody(r, &req); err != nil || strings.TrimSpace(req.Path) == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	abs, err := filepath.Abs(strings.TrimSpace(req.Path))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := runGitIn(abs, "rev-parse", "--show-toplevel")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "not a git repository: "+abs)
+		return
+	}
+	toplevel := strings.TrimSpace(string(out))
+	if top, err := filepath.EvalSymlinks(toplevel); err == nil {
+		toplevel = top
+	}
+	p, created, err := s.registry.AddProject(toplevel)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{"project": summarize(p), "created": created})
+}
+
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	s.registry.TouchOpened(p.ID)
+	p, _ = s.registry.Get().Find(p.ID)
+	writeJSON(w, http.StatusOK, summarize(p))
+}
+
+func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name       string          `json:"name"`
+		BaseBranch *string         `json:"base_branch"`
+		Github     *GithubSettings `json:"github"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Github != nil {
+		setLabels := true // client always sends the full labels list
+		if err := s.registry.UpdateGithub(p.ID, *req.Github, setLabels); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	err := s.registry.Update(func(reg *Registry) error {
+		proj, ok := reg.Find(p.ID)
+		if !ok {
+			return fmt.Errorf("project not found")
+		}
+		if n := strings.TrimSpace(req.Name); n != "" {
+			proj.Name = n
+		}
+		if req.BaseBranch != nil {
+			proj.BaseBranch = strings.TrimSpace(*req.BaseBranch)
+		}
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	p, _ = s.registry.Get().Find(p.ID)
+	writeJSON(w, http.StatusOK, summarize(p))
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	if err := s.registry.RemoveProject(p.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// --- Worktrees (change requests) ---
 
 type worktreeInfo struct {
 	Slug        string `json:"slug"`
@@ -75,13 +240,16 @@ type worktreeInfo struct {
 	HasResearch bool   `json:"has_research"`
 	HasPlan     bool   `json:"has_plan"`
 	Branch      string `json:"branch"`
+	Issue       int    `json:"issue,omitempty"` // linked GitHub issue number
+	PR          string `json:"pr,omitempty"`    // draft PR URL once created
 }
 
-func (s *Server) worktreeInfo(slug string) (worktreeInfo, error) {
+// worktreeInfo builds CR metadata for slug inside repoRoot's worktree dir.
+func readWorktreeInfo(repoRoot, slug string) (worktreeInfo, error) {
 	if !slugRe.MatchString(slug) {
 		return worktreeInfo{}, fmt.Errorf("invalid slug: %q", slug)
 	}
-	path := filepath.Join(s.worktreesDir, slug)
+	path := filepath.Join(state.RepoWorktreeDirFor(repoRoot), slug)
 	info := worktreeInfo{
 		Slug:    slug,
 		Path:    path,
@@ -101,129 +269,37 @@ func (s *Server) worktreeInfo(slug string) (worktreeInfo, error) {
 	}
 	if info.HasChange {
 		if data, err := os.ReadFile(filepath.Join(path, state.StateDir, "change.md")); err == nil {
-			info.Description = frontmatterField(string(data), "description")
+			content := string(data)
+			info.Description = frontmatterField(content, "description")
+			info.PR = frontmatterField(content, "pr")
+			if n := frontmatterField(content, "issue"); n != "" {
+				fmt.Sscanf(n, "%d", &info.Issue)
+			}
 		}
 	}
 	return info, nil
 }
 
 func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
-	slugs, err := state.ListWorktrees()
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	s.registry.TouchOpened(p.ID)
+	slugs, err := state.ListWorktreesIn(p.Path)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]worktreeInfo, 0, len(slugs))
 	for _, slug := range slugs {
-		info, err := s.worktreeInfo(slug)
+		info, err := readWorktreeInfo(p.Path, slug)
 		if err != nil {
 			continue
 		}
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-// --- Documents ---
-
-var docTypes = map[string]bool{"change": true, "research": true, "plan": true}
-
-func (s *Server) docPath(slug, doc string) (string, error) {
-	if !slugRe.MatchString(slug) || !docTypes[doc] {
-		return "", fmt.Errorf("invalid slug or document type")
-	}
-	if doc == "change" {
-		return filepath.Join(s.worktreesDir, slug, state.StateDir, "change.md"), nil
-	}
-	return filepath.Join(s.worktreesDir, slug, state.GeneratedDir, doc+".md"), nil
-}
-
-func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
-	path, err := s.docPath(r.PathValue("slug"), r.PathValue("doc"))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, fmt.Sprintf("%s not found", r.PathValue("doc")))
-		return
-	}
-	raw := string(data)
-	html, err := RenderMarkdown(raw)
-	if err != nil {
-		html = "<pre>" + raw + "</pre>"
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"raw": raw, "html": html})
-}
-
-func (s *Server) handlePutDoc(w http.ResponseWriter, r *http.Request) {
-	doc := r.PathValue("doc")
-	if doc != "change" {
-		writeErr(w, http.StatusMethodNotAllowed, "only change.md is editable")
-		return
-	}
-	path, err := s.docPath(r.PathValue("slug"), doc)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := os.Stat(filepath.Dir(path)); err != nil {
-		writeErr(w, http.StatusNotFound, "worktree not found")
-		return
-	}
-	var body struct {
-		Raw string `json:"raw"`
-	}
-	if err := decodeBody(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if err := os.WriteFile(path, []byte(body.Raw), 0644); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// --- Diff ---
-
-func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
-	if !slugRe.MatchString(slug) {
-		writeErr(w, http.StatusBadRequest, "invalid slug")
-		return
-	}
-	dir := filepath.Join(s.worktreesDir, slug)
-	if !state.HasWorktreeIn(dir) {
-		writeErr(w, http.StatusNotFound, "worktree not found")
-		return
-	}
-
-	git := func(args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		out, err := cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return string(out)
-	}
-
-	untracked := []string{}
-	if porcelain := git("status", "--porcelain"); porcelain != "" {
-		for _, line := range strings.Split(strings.TrimRight(porcelain, "\n"), "\n") {
-			if strings.HasPrefix(line, "??") {
-				untracked = append(untracked, strings.TrimSpace(line[2:]))
-			}
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"unstaged":  git("diff"),
-		"staged":    git("diff", "--cached"),
-		"untracked": untracked,
-	})
 }
 
 // --- Jobs ---
@@ -240,6 +316,10 @@ type runRequest struct {
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
 	var req runRequest
 	if err := decodeBody(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -299,8 +379,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "description must contain letters or digits")
 			return
 		}
-		if _, err := os.Stat(filepath.Join(s.worktreesDir, slug)); err == nil {
+		if _, err := os.Stat(filepath.Join(state.RepoWorktreeDirFor(p.Path), slug)); err == nil {
 			writeErr(w, http.StatusConflict, fmt.Sprintf("worktree already exists: %s", slug))
+			return
+		}
+		if err := s.checkCapacity(w, p); err != nil {
 			return
 		}
 		command = "new"
@@ -314,12 +397,36 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := s.Jobs.Start(slug, req.Cmd, command, argv)
+	job, err := s.Jobs.Start(JobStart{
+		ProjectID: p.ID,
+		Slug:      slug,
+		Kind:      req.Cmd,
+		Command:   command,
+		Dir:       p.Path,
+		Argv:      argv,
+	})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job.summary())
+}
+
+// checkCapacity enforces max_active_worktrees; writes 409 and returns an
+// error when the project is at capacity.
+func (s *Server) checkCapacity(w http.ResponseWriter, p *Project) error {
+	reg := s.registry.Get()
+	max := reg.Defaults.MaxActiveWorktrees
+	if max <= 0 {
+		return nil
+	}
+	count, _ := projectCRStats(p.Path)
+	if count >= max {
+		err := fmt.Errorf("at capacity: %d/%d active change requests — cleanup one or raise max_active_worktrees in Settings", count, max)
+		writeErr(w, http.StatusConflict, err.Error())
+		return err
+	}
+	return nil
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +440,8 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+// --- Shared helpers ---
 
 func generateSlug(desc string) string {
 	slug := strings.ToLower(strings.TrimSpace(desc))

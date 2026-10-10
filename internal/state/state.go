@@ -51,6 +51,18 @@ func EnsureDirs() error {
 
 // --- Path-aware variants (work from any directory) ---
 
+// RepoWorktreeDirFor returns ~/.maia/worktrees/<basename(repoRoot)> for an
+// explicit repository root, independent of the process working directory.
+func RepoWorktreeDirFor(repoRoot string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".maia", "worktrees", filepath.Base(repoRoot))
+}
+
+// ListWorktreesIn lists maia worktrees for the repository at repoRoot.
+func ListWorktreesIn(repoRoot string) ([]string, error) {
+	return listWorktreesInDir(RepoWorktreeDirFor(repoRoot))
+}
+
 // HasWorktreeIn checks if .maia directory exists under dir.
 func HasWorktreeIn(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, StateDir))

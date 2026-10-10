@@ -17,16 +17,17 @@ type JobEvent struct {
 	Data string `json:"data"`
 }
 
-// Job is one maia command execution (init, plan, apply, ...).
+// Job is one command execution (init, plan, apply, ..., issue import, PR).
 type Job struct {
-	ID       string    `json:"id"`
-	Slug     string    `json:"slug"`
-	Kind     string    `json:"kind"`
-	Command  string    `json:"command"`
-	Status   string    `json:"status"` // running | ok | error | canceled
-	ExitCode int       `json:"exit_code"`
-	Started  time.Time `json:"started"`
-	Ended    time.Time `json:"ended,omitempty"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Slug      string    `json:"slug"`
+	Kind      string    `json:"kind"`
+	Command   string    `json:"command"`
+	Status    string    `json:"status"` // running | ok | error | canceled
+	ExitCode  int       `json:"exit_code"`
+	Started   time.Time `json:"started"`
+	Ended     time.Time `json:"ended,omitempty"`
 
 	mu       sync.Mutex
 	nextID   int
@@ -35,6 +36,12 @@ type Job struct {
 	proc     *os.Process
 	canceled bool
 	done     bool
+	doneCh   chan struct{}
+}
+
+// Done is closed when the job reaches a terminal status.
+func (j *Job) Done() <-chan struct{} {
+	return j.doneCh
 }
 
 const maxJobEvents = 20000
@@ -93,6 +100,7 @@ func (j *Job) finish(status string, exitCode int) {
 	j.Status = status
 	j.ExitCode = exitCode
 	j.Ended = time.Now()
+	close(j.doneCh)
 	end := JobEvent{ID: -1, Type: "end", Data: status}
 	subs := make([]chan JobEvent, 0, len(j.subs))
 	for ch := range j.subs {
@@ -110,22 +118,23 @@ func (j *Job) finish(status string, exitCode int) {
 
 // JobSummary is a job without its event log.
 type JobSummary struct {
-	ID       string    `json:"id"`
-	Slug     string    `json:"slug"`
-	Kind     string    `json:"kind"`
-	Command  string    `json:"command"`
-	Status   string    `json:"status"`
-	ExitCode int       `json:"exit_code"`
-	Started  time.Time `json:"started"`
-	Ended    time.Time `json:"ended,omitempty"`
-	Lines    int       `json:"lines"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Slug      string    `json:"slug"`
+	Kind      string    `json:"kind"`
+	Command   string    `json:"command"`
+	Status    string    `json:"status"`
+	ExitCode  int       `json:"exit_code"`
+	Started   time.Time `json:"started"`
+	Ended     time.Time `json:"ended,omitempty"`
+	Lines     int       `json:"lines"`
 }
 
 func (j *Job) summary() JobSummary {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return JobSummary{
-		ID: j.ID, Slug: j.Slug, Kind: j.Kind, Command: j.Command,
+		ID: j.ID, ProjectID: j.ProjectID, Slug: j.Slug, Kind: j.Kind, Command: j.Command,
 		Status: j.Status, ExitCode: j.ExitCode, Started: j.Started, Ended: j.Ended,
 		Lines: len(j.events),
 	}
@@ -137,23 +146,38 @@ func (j *Job) isDone() bool {
 	return j.done
 }
 
-// JobManager runs at most one maia command at a time and keeps job history.
+// JobManager runs at most one command at a time and keeps job history. It is
+// shared across projects (LLM cost + git safety), with jobs tagged by project.
 type JobManager struct {
 	mu      sync.Mutex
 	jobs    map[string]*Job
 	order   []string // job IDs, oldest first
 	current string   // running job ID, "" if idle
 	seq     int
-	repoDir string
 }
 
-func NewJobManager(repoDir string) *JobManager {
-	return &JobManager{jobs: make(map[string]*Job), repoDir: repoDir}
+func NewJobManager() *JobManager {
+	return &JobManager{jobs: make(map[string]*Job)}
 }
 
-// Start launches a maia subcommand in repoDir. argv is the subcommand's own
-// arguments (e.g. ["init", "my-slug"]); the maia binary itself is prepended.
-func (m *JobManager) Start(slug, kind, command string, argv []string) (*Job, error) {
+// JobStart describes a command to run as a job.
+type JobStart struct {
+	ProjectID string
+	Slug      string
+	Kind      string
+	Command   string // display name (e.g. "init", "pr create")
+	Dir       string // working directory
+	Exe       string // "" = the maia binary itself
+	Argv      []string
+	// Post runs after a successful exit, before the job is marked done; its
+	// error (if any) flips the job to "error". Used by issue import to write
+	// change.md after `maia new` creates the worktree.
+	Post func(j *Job) error
+}
+
+// Start launches the command described by opts. The maia binary is prepended
+// unless opts.Exe names another program (e.g. "gh").
+func (m *JobManager) Start(opts JobStart) (*Job, error) {
 	m.mu.Lock()
 	if m.current != "" {
 		cur := m.jobs[m.current]
@@ -169,13 +193,15 @@ func (m *JobManager) Start(slug, kind, command string, argv []string) (*Job, err
 
 	m.seq++
 	job := &Job{
-		ID:      fmt.Sprintf("job-%d", m.seq),
-		Slug:    slug,
-		Kind:    kind,
-		Command: command,
-		Status:  "running",
-		Started: time.Now(),
-		subs:    make(map[chan JobEvent]struct{}),
+		ID:        fmt.Sprintf("job-%d", m.seq),
+		ProjectID: opts.ProjectID,
+		Slug:      opts.Slug,
+		Kind:      opts.Kind,
+		Command:   opts.Command,
+		Status:    "running",
+		Started:   time.Now(),
+		subs:      make(map[chan JobEvent]struct{}),
+		doneCh:    make(chan struct{}),
 	}
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
@@ -189,13 +215,17 @@ func (m *JobManager) Start(slug, kind, command string, argv []string) (*Job, err
 		return nil, err
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		return fail(fmt.Errorf("cannot locate maia binary: %w", err))
+	exe := opts.Exe
+	if exe == "" {
+		self, err := os.Executable()
+		if err != nil {
+			return fail(fmt.Errorf("cannot locate maia binary: %w", err))
+		}
+		exe = self
 	}
 
-	cmd := exec.Command(exe, argv...)
-	cmd.Dir = m.repoDir
+	cmd := exec.Command(exe, opts.Argv...)
+	cmd.Dir = opts.Dir
 	cmd.Env = os.Environ()
 
 	stdout, err := cmd.StdoutPipe()
@@ -208,7 +238,7 @@ func (m *JobManager) Start(slug, kind, command string, argv []string) (*Job, err
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fail(fmt.Errorf("failed to start %s: %w", command, err))
+		return fail(fmt.Errorf("failed to start %s: %w", opts.Command, err))
 	}
 
 	job.mu.Lock()
@@ -234,6 +264,13 @@ func (m *JobManager) Start(slug, kind, command string, argv []string) (*Job, err
 			status = "canceled"
 		}
 		job.mu.Unlock()
+		if status == "ok" && opts.Post != nil {
+			if err := opts.Post(job); err != nil {
+				status = "error"
+				exitCode = 1
+				job.append("line", "post-step failed: "+err.Error())
+			}
+		}
 		job.finish(status, exitCode)
 		m.clearCurrent(job.ID)
 	}()
