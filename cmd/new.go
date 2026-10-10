@@ -30,6 +30,12 @@ var newCmd = &cobra.Command{
 		// Generate names
 		slug := generateSlug(description)
 		branch := fmt.Sprintf("maia/%s", slug)
+		sourceBranch := baseBranch
+		if sourceBranch == "" {
+			if out, err := runGitCommand("rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+				sourceBranch = strings.TrimSpace(string(out))
+			}
+		}
 
 		// Get repo-specific worktree directory
 		repoDir, err := state.GetRepoWorktreeDir()
@@ -70,9 +76,10 @@ var newCmd = &cobra.Command{
 name: %s
 description: %s
 status: new
+source_branch: %s
 ---
 
-`, slug, description)
+`, slug, description, sourceBranch)
 
 		if err := os.WriteFile(filepath.Join(maiaDir, "change.md"), []byte(changeMD), 0644); err != nil {
 			return fmt.Errorf("failed to create change.md: %w", err)

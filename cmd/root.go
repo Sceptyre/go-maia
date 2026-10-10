@@ -22,6 +22,7 @@ Configuration:
   Keys:
     openai_api_key    - API key for LLM (supports {cmd:...} syntax)
     openai_base_url   - API base URL (default: https://api.openai.com/v1)
+    openai_headers    - Custom HTTP headers; {maia_session} is a stable per-CR ID
     model             - Model to use (default: gpt-4)
     brave_api_key     - Brave Search API key for web research
 
@@ -29,6 +30,7 @@ Configuration:
   {
     "openai_api_key": "{cmd:op read op://vault/mcp-api/token}",
     "openai_base_url": "https://api.openai.com/v1",
+    "openai_headers": {"x-opencode-session": "{maia_session}"},
     "model": "gpt-4",
     "brave_api_key": "your-key"
   }

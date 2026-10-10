@@ -83,6 +83,7 @@ Examples:
 		// Update status using path-aware helper
 		state.SetStatusIn(worktreePath, "applying")
 
+		llm.UseSessionIDFor(worktreePath, "")
 		client := llm.NewClient()
 		if client.APIKey == "" {
 			return fmt.Errorf("API key not configured")
@@ -226,7 +227,6 @@ Report what you did.`,
 	response, _, err := client.GetResponseWithTools(messages, []llm.Tool{taskTool}, taskHandler, 0)
 	return response, err
 }
-
 
 func init() {
 	applyCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Preview changes without applying")

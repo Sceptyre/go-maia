@@ -35,15 +35,15 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve base: explicit project setting, else origin default, else main.
-	base := p.BaseBranch
+	// Prefer the branch this CR was created from; fall back to the project default.
+	change, _ := os.ReadFile(filepath.Join(wtDir, state.StateDir, "change.md"))
+	base := frontmatterField(string(change), "source_branch")
 	if base == "" {
-		if out, err := runGitIn(p.Path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-			ref := strings.TrimSpace(string(out)) // e.g. origin/main
-			base = strings.TrimPrefix(ref, "origin/")
-		} else {
-			base = "main"
-		}
+		base = projectDefaultBranch(p.Path, p.BaseBranch)
+	}
+	base = strings.TrimPrefix(base, "origin/")
+	if base == "" {
+		base = "main"
 	}
 	baseRef := base
 	if _, err := runGitIn(p.Path, "rev-parse", "--verify", base); err != nil {

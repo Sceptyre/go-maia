@@ -32,6 +32,7 @@ type Project struct {
 	Path       string         `json:"path"`
 	Name       string         `json:"name"`
 	BaseBranch string         `json:"base_branch,omitempty"`
+	RemoteURL  string         `json:"remote_url,omitempty"`
 	AddedAt    time.Time      `json:"added_at"`
 	LastOpened time.Time      `json:"last_opened,omitempty"`
 	Github     GithubSettings `json:"github"`

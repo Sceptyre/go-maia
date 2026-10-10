@@ -29,13 +29,14 @@ type serverView struct {
 }
 
 type configView struct {
-	Model         string `json:"model"`
-	OpenAIBaseURL string `json:"openai_base_url"`
-	OpenAIAPIKey  string `json:"openai_api_key"` // "" | "set" | "{cmd:...}"
-	BraveAPIKey   string `json:"brave_api_key"`  // "" | "set" | "{cmd:...}"
-	GithubToken   string `json:"github_token"`   // "" | "set" | "{cmd:...}"`
-	MaxTokens     int    `json:"max_tokens"`
-	EnvOverride   bool   `json:"env_override"` // OPENAI_API_KEY present in env
+	Model         string            `json:"model"`
+	OpenAIBaseURL string            `json:"openai_base_url"`
+	OpenAIHeaders map[string]string `json:"openai_headers"`
+	OpenAIAPIKey  string            `json:"openai_api_key"` // "" | "set" | "{cmd:...}"
+	BraveAPIKey   string            `json:"brave_api_key"`  // "" | "set" | "{cmd:...}"
+	GithubToken   string            `json:"github_token"`   // "" | "set" | "{cmd:...}"`
+	MaxTokens     int               `json:"max_tokens"`
+	EnvOverride   bool              `json:"env_override"` // OPENAI_API_KEY present in env
 }
 
 // maskKey renders a secret for the UI: passthrough commands are safe to show.
@@ -57,6 +58,7 @@ func (s *Server) loadConfigView() configView {
 	return configView{
 		Model:         cfg.Model,
 		OpenAIBaseURL: cfg.OpenAIBaseURL,
+		OpenAIHeaders: cfg.OpenAIHeaders,
 		OpenAIAPIKey:  maskKey(cfg.OpenAIAPIKey),
 		BraveAPIKey:   maskKey(cfg.BraveAPIKey),
 		GithubToken:   maskKey(cfg.GithubToken),
@@ -100,11 +102,25 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// LLM config: only overwrite secrets when a new value is supplied.
 	if in.Config != nil {
 		cfg, err := config.Load()
+		seenHeaders := make(map[string]bool)
+		for name, value := range in.Config.OpenAIHeaders {
+			canonical := http.CanonicalHeaderKey(name)
+			if !validHTTPHeaderName(name) || seenHeaders[canonical] || strings.ContainsAny(value, "\r\n") {
+				writeErr(w, http.StatusBadRequest, "custom headers must use unique valid names and single-line values")
+				return
+			}
+			seenHeaders[canonical] = true
+		}
+
 		if err != nil || cfg == nil {
 			cfg = &config.Config{}
 		}
 		cfg.Model = in.Config.Model
 		cfg.OpenAIBaseURL = strings.TrimSpace(in.Config.OpenAIBaseURL)
+		if in.Config.OpenAIHeaders != nil {
+			cfg.OpenAIHeaders = in.Config.OpenAIHeaders
+		}
+
 		cfg.MaxTokens = in.Config.MaxTokens
 		if in.Config.OpenAIAPIKey != "" && !strings.HasPrefix(in.Config.OpenAIAPIKey, "set") {
 			cfg.OpenAIAPIKey = in.Config.OpenAIAPIKey

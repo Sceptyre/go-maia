@@ -49,6 +49,7 @@ type projectSummary struct {
 	Name       string         `json:"name"`
 	Path       string         `json:"path"`
 	BaseBranch string         `json:"base_branch,omitempty"`
+	RemoteURL  string         `json:"remote_url,omitempty"`
 	AddedAt    time.Time      `json:"added_at"`
 	LastOpened time.Time      `json:"last_opened,omitempty"`
 	Github     GithubSettings `json:"github"`
@@ -59,7 +60,7 @@ type projectSummary struct {
 func summarize(p *Project) projectSummary {
 	count, statuses := projectCRStats(p.Path)
 	return projectSummary{
-		ID: p.ID, Name: p.Name, Path: p.Path, BaseBranch: p.BaseBranch,
+		ID: p.ID, Name: p.Name, Path: p.Path, BaseBranch: p.BaseBranch, RemoteURL: p.RemoteURL,
 		AddedAt: p.AddedAt, LastOpened: p.LastOpened, Github: p.Github,
 		CRCount: count, Statuses: statuses,
 	}
@@ -132,13 +133,49 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAddProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path string `json:"path"`
+		Path      string `json:"path"`
+		RemoteURL string `json:"remote_url"`
 	}
-	if err := decodeBody(r, &req); err != nil || strings.TrimSpace(req.Path) == "" {
-		writeErr(w, http.StatusBadRequest, "path is required")
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	abs, err := filepath.Abs(strings.TrimSpace(req.Path))
+	path, remote := strings.TrimSpace(req.Path), strings.TrimSpace(req.RemoteURL)
+	if (path == "") == (remote == "") {
+		writeErr(w, http.StatusBadRequest, "provide either a local repository path or a remote URL")
+		return
+	}
+	if remote != "" {
+		var err error
+		remote, err = validateRemoteURL(remote)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		path, err = managedClonePath(remote)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if err := cloneRemote(remote, path); err != nil {
+				writeErr(w, http.StatusBadGateway, err.Error())
+				return
+			}
+		} else {
+			if _, err := runGitIn(path, "rev-parse", "--show-toplevel"); err != nil {
+				writeErr(w, http.StatusConflict, "managed project path exists but is not a git repository: "+path)
+				return
+			}
+			origin, err := runGitIn(path, "remote", "get-url", "origin")
+			if err != nil || strings.TrimSpace(string(origin)) != remote {
+				writeErr(w, http.StatusConflict, "managed clone exists with a different origin URL")
+				return
+			}
+		}
+	}
+
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -157,11 +194,39 @@ func (s *Server) handleAddProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if remote != "" {
+		if err := s.registry.Update(func(reg *Registry) error {
+			proj, ok := reg.Find(p.ID)
+			if !ok {
+				return fmt.Errorf("project not found")
+			}
+			proj.RemoteURL = remote
+			proj.Name = filepath.Base(strings.TrimSuffix(strings.TrimRight(remote, "/"), ".git"))
+			return nil
+		}); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		p, _ = s.registry.Get().Find(p.ID)
+	}
 	status := http.StatusCreated
 	if !created {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, map[string]any{"project": summarize(p), "created": created})
+}
+
+func (s *Server) handleListProjectBranches(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	branches, defaultBranch, err := listProjectBranches(p.Path, p.BaseBranch)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"branches": branches, "default_branch": defaultBranch})
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
@@ -231,17 +296,18 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 // --- Worktrees (change requests) ---
 
 type worktreeInfo struct {
-	Slug        string `json:"slug"`
-	Path        string `json:"path"`
-	Status      string `json:"status"`
-	Description string `json:"description,omitempty"`
-	HasMaia     bool   `json:"has_maia"`
-	HasChange   bool   `json:"has_change"`
-	HasResearch bool   `json:"has_research"`
-	HasPlan     bool   `json:"has_plan"`
-	Branch      string `json:"branch"`
-	Issue       int    `json:"issue,omitempty"` // linked GitHub issue number
-	PR          string `json:"pr,omitempty"`    // draft PR URL once created
+	Slug         string `json:"slug"`
+	Path         string `json:"path"`
+	Status       string `json:"status"`
+	Description  string `json:"description,omitempty"`
+	HasMaia      bool   `json:"has_maia"`
+	HasChange    bool   `json:"has_change"`
+	HasResearch  bool   `json:"has_research"`
+	HasPlan      bool   `json:"has_plan"`
+	Branch       string `json:"branch"`
+	SourceBranch string `json:"source_branch,omitempty"`
+	Issue        int    `json:"issue,omitempty"` // linked GitHub issue number
+	PR           string `json:"pr,omitempty"`    // draft PR URL once created
 }
 
 // worktreeInfo builds CR metadata for slug inside repoRoot's worktree dir.
@@ -271,6 +337,8 @@ func readWorktreeInfo(repoRoot, slug string) (worktreeInfo, error) {
 		if data, err := os.ReadFile(filepath.Join(path, state.StateDir, "change.md")); err == nil {
 			content := string(data)
 			info.Description = frontmatterField(content, "description")
+			info.SourceBranch = frontmatterField(content, "source_branch")
+
 			info.PR = frontmatterField(content, "pr")
 			if n := frontmatterField(content, "issue"); n != "" {
 				fmt.Sscanf(n, "%d", &info.Issue)
@@ -328,15 +396,30 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	var slug, command string
 	var argv []string
+	var post func(*Job) error
 
 	switch req.Cmd {
-	case "init", "plan", "merge", "cleanup":
+	case "init", "plan", "cleanup":
 		if !slugRe.MatchString(req.Slug) {
 			writeErr(w, http.StatusBadRequest, "invalid or missing slug")
 			return
 		}
 		slug, command = req.Slug, req.Cmd
 		argv = []string{req.Cmd, req.Slug}
+
+	case "merge":
+		if !slugRe.MatchString(req.Slug) {
+			writeErr(w, http.StatusBadRequest, "invalid or missing slug")
+			return
+		}
+		slug, command = req.Slug, "merge"
+		argv = []string{"merge", req.Slug}
+		changeFile := filepath.Join(state.RepoWorktreeDirFor(p.Path), req.Slug, state.StateDir, "change.md")
+		if data, err := os.ReadFile(changeFile); err == nil {
+			if base := frontmatterField(string(data), "source_branch"); base != "" {
+				argv = append(argv, "--base", base)
+			}
+		}
 
 	case "steer":
 		if !slugRe.MatchString(req.Slug) || strings.TrimSpace(req.Feedback) == "" {
@@ -386,10 +469,21 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		if err := s.checkCapacity(w, p); err != nil {
 			return
 		}
+		base := strings.TrimSpace(req.Base)
+		if base == "" {
+			base = projectDefaultBranch(p.Path, p.BaseBranch)
+		}
+		resolvedBase, err := resolveSourceBranch(p.Path, base)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		base = resolvedBase
 		command = "new"
-		argv = []string{"new", desc}
-		if req.Base != "" {
-			argv = append(argv, "--base", req.Base)
+		argv = []string{"new", desc, "--base", base}
+		post = func(*Job) error {
+			changeFile := filepath.Join(state.RepoWorktreeDirFor(p.Path), slug, state.StateDir, "change.md")
+			return setFrontmatterField(changeFile, "source_branch", base)
 		}
 
 	default:
@@ -404,6 +498,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Command:   command,
 		Dir:       p.Path,
 		Argv:      argv,
+		Post:      post,
 	})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())

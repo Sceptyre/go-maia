@@ -206,7 +206,7 @@ function projectSettings(p) {
     wide: true,
     body: h('div', { class: 'form' },
       h('label', { class: 'muted tiny' }, 'Display name'), name,
-      h('label', { class: 'muted tiny' }, 'Base branch'), base,
+      h('label', { class: 'muted tiny' }, 'Default source branch (blank = detect origin default)'), base,
       h('div', { class: 'form-sep' }, 'GitHub'),
       h('label', { class: 'inline-label' }, ghEnabled, ' enable issue detection & draft PRs'),
       h('label', { class: 'muted tiny' }, 'Repo resolution'), ghMode,

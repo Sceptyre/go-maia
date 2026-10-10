@@ -53,6 +53,7 @@ Examples:
 			return fmt.Errorf("not a maia worktree: %s", worktreePath)
 		}
 
+		llm.UseSessionIDFor(worktreePath, "")
 		client := llm.NewClient()
 		if client.APIKey == "" {
 			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")

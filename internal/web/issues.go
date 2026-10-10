@@ -269,6 +269,10 @@ func (s *Server) startImportJob(p *Project, is *github.Issue) (*Job, error) {
 		}
 	}
 	desc := fmt.Sprintf("%s #%d", is.Title, is.Number)
+	base, err := resolveSourceBranch(p.Path, projectDefaultBranch(p.Path, p.BaseBranch))
+	if err != nil {
+		return nil, fmt.Errorf("cannot import issue #%d: %w", is.Number, err)
+	}
 
 	post := func(j *Job) error {
 		actual := ""
@@ -284,7 +288,7 @@ func (s *Server) startImportJob(p *Project, is *github.Issue) (*Job, error) {
 			return fmt.Errorf("worktree for issue #%d not found after maia new", is.Number)
 		}
 		path := filepath.Join(state.RepoWorktreeDirFor(p.Path), actual, state.StateDir, "change.md")
-		if err := os.WriteFile(path, []byte(issueChangeMD(is, actual)), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(issueChangeMD(is, actual, base)), 0644); err != nil {
 			return err
 		}
 		j.append("line", fmt.Sprintf("✓ change.md created for issue #%d → %s", is.Number, actual))
@@ -297,13 +301,13 @@ func (s *Server) startImportJob(p *Project, is *github.Issue) (*Job, error) {
 		Kind:      "import",
 		Command:   fmt.Sprintf("import #%d", is.Number),
 		Dir:       p.Path,
-		Argv:      []string{"new", desc},
+		Argv:      []string{"new", desc, "--base", base},
 		Post:      post,
 	})
 }
 
 // issueChangeMD renders the change.md template for a GitHub issue.
-func issueChangeMD(is *github.Issue, slug string) string {
+func issueChangeMD(is *github.Issue, slug, sourceBranch string) string {
 	body := strings.TrimSpace(is.Body)
 	if body == "" {
 		body = "_No issue description provided._"
@@ -318,6 +322,7 @@ name: %s
 description: %s
 status: new
 source: github
+source_branch: %s
 issue: %d
 url: %s
 ---
@@ -329,7 +334,7 @@ url: %s
 ## Requirements
 
 - Implements #%d (imported from GitHub — keep this reference)
-`, slug, is.Title, is.Number, is.HTMLURL, body, is.Number)
+`, slug, is.Title, sourceBranch, is.Number, is.HTMLURL, body, is.Number)
 }
 
 // startPoller scans each project for labeled issues on its interval; auto

@@ -6,8 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/sceptyre/maia/internal/llm"
 )
 
 // JobEvent is a single streamed item: a log line, a status change, or the end marker.
@@ -226,7 +229,16 @@ func (m *JobManager) Start(opts JobStart) (*Job, error) {
 
 	cmd := exec.Command(exe, opts.Argv...)
 	cmd.Dir = opts.Dir
-	cmd.Env = os.Environ()
+	work := opts.Slug
+	if work == "" {
+		work = opts.Command
+	}
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "MAIA_SESSION_ID=") {
+			cmd.Env = append(cmd.Env, env)
+		}
+	}
+	cmd.Env = append(cmd.Env, "MAIA_SESSION_ID="+llm.SessionIDFor(opts.Dir, work))
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

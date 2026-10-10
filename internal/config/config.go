@@ -12,9 +12,10 @@ import (
 // Config represents the maia configuration
 type Config struct {
 	// LLM settings
-	OpenAIAPIKey  string `json:"openai_api_key"`
-	OpenAIBaseURL string `json:"openai_base_url"`
-	Model         string `json:"model"`
+	OpenAIAPIKey  string            `json:"openai_api_key"`
+	OpenAIBaseURL string            `json:"openai_base_url"`
+	OpenAIHeaders map[string]string `json:"openai_headers,omitempty"`
+	Model         string            `json:"model"`
 
 	// Web search
 	BraveAPIKey string `json:"brave_api_key"`

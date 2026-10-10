@@ -21,6 +21,8 @@ type Client struct {
 	APIKey     string
 	Model      string
 	MaxTokens  int
+	Headers    map[string]string
+	SessionID  string
 	HTTPClient *http.Client
 }
 
@@ -111,6 +113,9 @@ func (c Choice) Truncated() bool {
 // NewClient creates a new LLM client
 func NewClient() *Client {
 	cfg, _ := config.Load()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 
 	baseURL := config.Get("openai_base_url")
 	if baseURL == "" {
@@ -131,13 +136,13 @@ func NewClient() *Client {
 		}
 	}
 
-	_ = cfg // ensure config is loaded
-
 	return &Client{
 		BaseURL:   baseURL,
 		APIKey:    apiKey,
 		Model:     model,
 		MaxTokens: maxTokens,
+		Headers:   cfg.OpenAIHeaders,
+		SessionID: currentSessionID(),
 		HTTPClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
@@ -187,6 +192,19 @@ func (c *Client) ChatWithMaxTokens(messages []Message, tools []Tool, maxTokens i
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	sessionID := c.SessionID
+	if sessionID == "" {
+		sessionID = currentSessionID()
+	}
+	seenHeaders := make(map[string]bool)
+	for key, value := range c.Headers {
+		canonical := http.CanonicalHeaderKey(key)
+		if !validHeaderName(key) || seenHeaders[canonical] || strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("invalid or duplicate custom HTTP header %q", key)
+		}
+		seenHeaders[canonical] = true
+		req.Header.Set(key, expandSessionTemplate(value, sessionID))
 	}
 
 	resp, err := c.HTTPClient.Do(req)

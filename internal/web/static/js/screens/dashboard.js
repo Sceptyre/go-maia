@@ -29,7 +29,7 @@ export async function render(root, ctx) {
   if (!projects.length) {
     grid.appendChild(emptyState(
       'No projects yet',
-      'Add a git repository path to start managing change requests with maia.'));
+      'Add a local repository path or clone a remote Git repository to start managing change requests with maia.'));
     return;
   }
 
@@ -56,7 +56,7 @@ function projectCard(p, ctx) {
         class: 'btn btn-tiny btn-ghost', title: 'Project settings',
         onclick: (e) => { e.stopPropagation(); ctx.projectSettings(p); },
       }, '⚙')),
-    h('div', { class: 'card-path mono' }, p.path),
+    h('div', { class: 'card-path mono' }, p.remote_url || p.path),
     h('div', { class: 'card-row' },
       h('span', { class: 'cr-count' }, `${p.cr_count} CR${p.cr_count === 1 ? '' : 's'}`),
       statuses.slice(0, 4), gh,
@@ -66,29 +66,39 @@ function projectCard(p, ctx) {
 }
 
 function addProjectModal(ctx) {
-  const path = h('input', { class: 'input', placeholder: '/path/to/repo', spellcheck: 'false' });
+  const mode = h('select', { class: 'input' },
+    h('option', { value: 'path' }, 'Local repository'),
+    h('option', { value: 'remote' }, 'Remote repository URL'));
+  const value = h('input', { class: 'input', placeholder: '/path/to/repo', spellcheck: 'false' });
+  const label = h('label', { class: 'muted' }, 'Absolute path to a git repository');
   const err = h('div', { class: 'error-text' });
+  mode.addEventListener('change', () => {
+    const remote = mode.value === 'remote';
+    label.textContent = remote ? 'HTTPS, SSH, or SCP-style Git URL' : 'Absolute path to a git repository';
+    value.placeholder = remote ? 'https://github.com/owner/repo.git' : '/path/to/repo';
+  });
   const add = async () => {
     try {
-      const res = await post('/api/projects', { path: path.value.trim() });
+      const payload = mode.value === 'remote'
+        ? { remote_url: value.value.trim() }
+        : { path: value.value.trim() };
+      const res = await post('/api/projects', payload);
       m.close();
       toast(res.created ? `Added ${res.project.name}` : `${res.project.name} already registered`, 'ok');
       window.dispatchEvent(new CustomEvent('maia:projects-changed'));
       ctx.refresh();
     } catch (e) { err.textContent = e.message; }
   };
-  path.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  value.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
   const m = modal({
     title: 'Add project',
-    body: h('div', { class: 'form' },
-      h('label', { class: 'muted' }, 'Absolute path to a git repository'),
-      path, err),
+    body: h('div', { class: 'form' }, mode, label, value, err),
     actions: [
       h('button', { class: 'btn', onclick: () => m.close() }, 'Cancel'),
       h('button', { class: 'btn btn-primary', onclick: add }, 'Add'),
     ],
   });
-  path.focus();
+  value.focus();
 }
 
 // Opened from the sidebar "Add project" row and the command palette.

@@ -132,6 +132,9 @@ Maia is configured via `~/.maia/config.json`:
 {
   "openai_api_key": "your-api-key",
   "openai_base_url": "https://api.openai.com/v1",
+  "openai_headers": {
+    "x-opencode-session": "{maia_session}"
+  },
   "model": "gpt-4",
   "brave_api_key": "your-brave-api-key"
 }
@@ -143,6 +146,7 @@ Maia is configured via `~/.maia/config.json`:
 |-----|------|---------|-------------|
 | `openai_api_key` | `string` | — | **Required.** API key for the LLM provider (OpenAI-compatible) |
 | `openai_base_url` | `string` | `https://api.openai.com/v1` | API base URL. Change this for Azure, Ollama, LM Studio, etc. |
+| `openai_headers` | `object` | `{}` | Extra HTTP headers for compatible providers. Values may use `{maia_session}`, a deterministic ID per project/change request (e.g. `x-opencode-session`). |
 | `model` | `string` | `gpt-4` | Model to use for all AI operations |
 | `brave_api_key` | `string` | — | Brave Search API key for enhanced web research. Falls back to DuckDuckGo if not set. |
 
@@ -328,7 +332,8 @@ maia new -b develop "description"      # Create from a specific branch
 
 `maia web` runs a local server that manages **multiple projects** (git
 repositories). It auto-registers the repository you launch it from; add more
-from the dashboard. It's a progressive web app (installable, works offline for
+from the dashboard by local path or clone a remote HTTPS/SSH Git URL into
+`~/.maia/projects/`. It's a progressive web app (installable, works offline for
 the cached shell) with a mobile-first layout.
 
 ```bash
@@ -339,10 +344,11 @@ maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
 
 - **Projects dashboard** — every supported repository with its path, open
   change-request count, and last GitHub scan
-- **Change requests** — each repo's CRs with status badges; the **Issues**
-  screen auto-detects open GitHub issues labeled `maia` and imports one as a
-  worktree + `change.md` (lazy materialization, capped by
-  `max_active_worktrees`)
+- **Change requests** — each repo's CRs with status badges; create a CR from
+  any local or origin branch. Imported GitHub issues use the configured/default
+  origin branch automatically, so additional CRs can branch from earlier work.
+  The **Issues** screen auto-detects open issues labeled `maia` and imports one
+  as a worktree + `change.md` (lazy materialization, capped by `max_active_worktrees`)
 - **CR detail** — Docs (edit `change.md`, read rendered `research.md`/`plan.md`),
   Diff (worktree changes), and Run (streaming job console over SSE)
 - **Settings** — one master config (`~/.maia/web.json`) for the server, global

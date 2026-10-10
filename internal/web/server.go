@@ -90,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	// Projects (the supported repos)
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
 	mux.HandleFunc("POST /api/projects", s.handleAddProject)
+	mux.HandleFunc("GET /api/projects/{pid}/branches", s.handleListProjectBranches)
 	mux.HandleFunc("GET /api/projects/{pid}", s.handleGetProject)
 	mux.HandleFunc("PUT /api/projects/{pid}", s.handleUpdateProject)
 	mux.HandleFunc("DELETE /api/projects/{pid}", s.handleDeleteProject)

@@ -153,13 +153,22 @@ function configCard(c) {
   const brave = mk('brave_api_key', 'password', c.brave_api_key ? '•••••• set — leave empty to keep' : '');
   const ghToken = mk('github_token', 'password', c.github_token ? '•••••• set — leave empty to keep' : 'ghp-… / {cmd:gh auth token}');
   const maxTok = mk('max_tokens', 'number', String(c.max_tokens || ''));
+  const headers = h('textarea', { class: 'input', rows: 5 }, JSON.stringify(c.openai_headers || {}, null, 2));
 
   const envNote = env.length
     ? h('div', { class: 'muted tiny' }, `environment overrides active: ${env.join(', ')} — config file values ignored for these`)
     : null;
 
   const save = async () => {
-    const cfg = { model: model.value.trim(), openai_base_url: baseURL.value.trim() };
+    let customHeaders;
+    try {
+      customHeaders = JSON.parse(headers.value || '{}');
+      if (!customHeaders || Array.isArray(customHeaders) || typeof customHeaders !== 'object' ||
+          Object.values(customHeaders).some((v) => typeof v !== 'string')) {
+        throw new Error('custom headers must be a JSON object with string values');
+      }
+    } catch (e) { toast(`Invalid custom headers: ${e.message}`, 'err'); return; }
+    const cfg = { model: model.value.trim(), openai_base_url: baseURL.value.trim(), openai_headers: customHeaders };
     if (apiKey.value) cfg.openai_api_key = apiKey.value;
     if (brave.value) cfg.brave_api_key = brave.value;
     if (ghToken.value) cfg.github_token = ghToken.value;
@@ -176,6 +185,7 @@ function configCard(c) {
     envNote,
     field('Model', model, 'e.g. openai/gpt-5.2'),
     field('Base URL', baseURL, 'https://api.openai.com/v1'),
+    field('Custom request headers (JSON)', headers, 'Template values may include {maia_session}, a stable ID per project and change request.'),
     field('OpenAI API key', apiKey, ''),
     field('Max tokens', maxTok, 'default 16384'),
     field('Brave API key', brave, 'web search (research)'),

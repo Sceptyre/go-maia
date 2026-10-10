@@ -99,17 +99,24 @@ function crCard(c, pid) {
       h('div', { class: 'card-title' }, c.description || c.slug),
       h('span', { class: 'spacer' }),
       c.issue ? h('span', { class: 'chip chip-issue' }, `#${c.issue}`) : null,
+      c.source_branch ? h('span', { class: 'chip' }, `from ${c.source_branch}`) : null,
       c.pr ? h('span', { class: 'chip chip-pr' }, 'PR ↗') : null,
       h('span', { class: 'chev' }, '›')),
     h('div', { class: 'mono tiny muted' }, c.slug));
 }
 
 async function newCRModal(ctx, pid) {
+  let branchData;
+  try { branchData = await get(`/api/projects/${pid}/branches`); }
+  catch (e) { toast(e.message, 'err'); return; }
+  const source = h('select', { class: 'input' },
+    ...branchData.branches.map((branch) => h('option', { value: branch }, branch)));
+  source.value = branchData.default_branch;
   const ta = h('textarea', { class: 'input', rows: 3, placeholder: 'Describe the change you want…' });
   const err = h('div', { class: 'error-text' });
   const go = async () => {
     try {
-      const job = await startJob(pid, { cmd: 'new', description: ta.value.trim() });
+      const job = await startJob(pid, { cmd: 'new', description: ta.value.trim(), base: source.value });
       m.close();
       toast('Creating change request…', 'ok');
       location.hash = `#/p/${pid}/cr/${job.slug}/run`;
@@ -118,6 +125,8 @@ async function newCRModal(ctx, pid) {
   const m = modal({
     title: 'New change request',
     body: h('div', { class: 'form' },
+      h('label', { class: 'muted' }, 'Source branch — new CR branches from this branch'),
+      source,
       h('label', { class: 'muted' }, 'Description — the worktree slug is derived from it'),
       ta, err),
     actions: [
@@ -154,7 +163,8 @@ async function renderCR(root, ctx, pid, slug, tab) {
     h('div', { class: 'crumbs' },
       h('a', { href: `#/p/${pid}`, class: 'back' }, '← ' + (ctx.projectName || 'project')),
       cr ? h('h1', {}, cr.description || cr.slug) : h('h1', {}, 'Creating…'),
-      cr ? h('span', { class: 'mono tiny muted' }, cr.slug) : null),
+      cr ? h('span', { class: 'mono tiny muted' }, cr.slug) : null,
+      cr && cr.source_branch ? h('span', { class: 'chip' }, `from ${cr.source_branch}`) : null),
     h('div', { class: 'head-actions' }, cr ? statusBadge(cr.status) : spinner()));
 
   if (cr && cr.issue) {
