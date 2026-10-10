@@ -1,18 +1,62 @@
-// screens/settings.js — admin dashboard: server info, defaults, maia config.
+// screens/settings.js — admin dashboard following the OpenHands settings flow:
+// #/settings is the hub (mobile: section list; desktop: redirects to the first
+// section), and each section lives at its own route with a section nav.
 
 import { get, put } from '../api.js';
 import { h, clear, toast, spinner } from '../ui.js';
 
-export async function render(root, ctx) {
+const SECTIONS = [
+  { id: 'server', title: 'Server', sub: 'version, address, and token status', icon: 'host' },
+  { id: 'defaults', title: 'Web defaults', sub: 'worktree cap, issue detection, import mode', icon: 'sliders' },
+  { id: 'config', title: 'maia config', sub: 'model, API keys, and tokens', icon: 'key' },
+];
+
+const HUB_ICONS = {
+  host: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>',
+  sliders: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
+  key: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.85 12.15 7.15-7.15M18 5l2 2M15 8l2 2"/></svg>',
+  chev: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+};
+
+export async function render(root, ctx, sectionId) {
   clear(root);
+
+  // Desktop hub → redirect to the first section (OpenHands behavior);
+  // mobile keeps the hub as the full-screen section list.
+  if (!sectionId && window.matchMedia('(min-width: 700px)').matches) {
+    location.replace('#/settings/server');
+    return;
+  }
+
+  if (!sectionId) return renderHub(root);
+
+  const meta = SECTIONS.find((s) => s.id === sectionId);
+  if (!meta) { location.replace('#/settings'); return; }
+
+  const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
+  for (const s of SECTIONS) {
+    nav.appendChild(h('a', {
+      class: 'nav-row' + (s.id === sectionId ? ' active' : ''),
+      href: `#/settings/${s.id}`, title: s.title,
+    },
+      h('span', { class: 'ico', html: HUB_ICONS[s.icon] }),
+      h('span', { class: 'label' }, s.title)));
+  }
+
+  const body = h('div', { class: 'settings-body' });
+  const content = h('div', { class: 'settings-content' },
+    h('header', { class: 'settings-head' },
+      h('h2', {}, meta.title),
+      h('p', { class: 'muted sub' }, meta.sub)),
+    body);
+
+  const layout = h('div', { class: 'settings-layout' }, nav, content);
   root.appendChild(h('div', { class: 'page-head' },
     h('div', { class: 'crumbs' },
       h('a', { href: '#/', class: 'back' }, '← Projects'),
-      h('h1', {}, 'Settings'),
-      h('div', { class: 'muted sub' }, 'master configuration — one place for server, defaults, and maia config'))));
+      h('h1', {}, 'Settings'))));
+  root.appendChild(layout);
 
-  const body = h('div', { class: 'settings' });
-  root.appendChild(body);
   body.appendChild(h('div', { class: 'loading pad' }, spinner()));
 
   let data;
@@ -23,10 +67,29 @@ export async function render(root, ctx) {
     body.appendChild(h('div', { class: 'error-box' }, e.message));
     return;
   }
+
   clear(body);
-  body.appendChild(serverCard(data.server));
-  body.appendChild(defaultsCard(data.defaults, ctx));
-  body.appendChild(configCard(data.config));
+  if (sectionId === 'server') body.appendChild(serverCard(data.server));
+  else if (sectionId === 'defaults') body.appendChild(defaultsCard(data.defaults, ctx));
+  else if (sectionId === 'config') body.appendChild(configCard(data.config));
+}
+
+function renderHub(root) {
+  root.appendChild(h('div', { class: 'page-head' },
+    h('div', {},
+      h('h1', {}, 'Settings'),
+      h('div', { class: 'muted sub' }, 'master configuration — server, defaults, and maia config'))));
+
+  const list = h('div', { class: 'hub-list' });
+  for (const s of SECTIONS) {
+    list.appendChild(h('a', { class: 'hub-row', href: `#/settings/${s.id}` },
+      h('span', { class: 'hub-ico', html: HUB_ICONS[s.icon] }),
+      h('span', { class: 'hub-text' },
+        h('span', { class: 'hub-title' }, s.title),
+        h('span', { class: 'hub-sub muted tiny' }, s.sub)),
+      h('span', { class: 'chev', html: HUB_ICONS.chev })));
+  }
+  root.appendChild(list);
 }
 
 function serverCard(s) {

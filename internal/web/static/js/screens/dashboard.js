@@ -10,7 +10,7 @@ export async function render(root, ctx) {
       h('h1', {}, 'Projects'),
       h('div', { class: 'muted sub' }, 'Supported repositories you manage change requests for')),
     h('div', { class: 'head-actions' },
-      h('button', { class: 'btn btn-primary', onclick: () => addProjectModal(ctx) }, '+ Add project'),
+      h('button', { class: 'btn btn-primary', onclick: () => openAddProject(ctx) }, '+ Add project'),
       h('button', { class: 'btn', title: 'Settings', onclick: () => { location.hash = '#/settings'; } }, '⚙')));
 
   const grid = h('div', { class: 'cards' }, h('div', { class: 'loading' }, spinner(), ' Loading projects…'));
@@ -73,6 +73,7 @@ function addProjectModal(ctx) {
       const res = await post('/api/projects', { path: path.value.trim() });
       m.close();
       toast(res.created ? `Added ${res.project.name}` : `${res.project.name} already registered`, 'ok');
+      window.dispatchEvent(new CustomEvent('maia:projects-changed'));
       ctx.refresh();
     } catch (e) { err.textContent = e.message; }
   };
@@ -89,3 +90,6 @@ function addProjectModal(ctx) {
   });
   path.focus();
 }
+
+// Opened from the sidebar "Add project" row and the command palette.
+export { addProjectModal as openAddProject };

@@ -3,6 +3,8 @@
 import { state as fetchState, setToken, put, del, get } from './api.js';
 import { h, clear, toast, modal, confirmModal, spinner } from './ui.js';
 import { closeAllConsoles } from './jobs.js';
+import { initSidebar, refreshSidebar } from './sidebar.js';
+import { initPalette } from './palette.js';
 import * as dashboard from './screens/dashboard.js';
 import * as project from './screens/project.js';
 import * as issues from './screens/issues.js';
@@ -65,7 +67,7 @@ async function render() {
   }
   if (parts[1] === 'settings') {
     document.title = 'Settings · maia';
-    return settings.render(root, { ...ctx, parts });
+    return settings.render(root, { ...ctx, parts }, parts[2]);
   }
   document.title = 'maia';
   return dashboard.render(root, { ...ctx, parts });
@@ -91,6 +93,7 @@ async function poll() {
   S.state = st;
 
   drawBanner(st);
+  refreshSidebar();
 
   const wasRunning = prev && prev.running_job;
   const isRunning = st.running_job;
@@ -179,6 +182,7 @@ function projectSettings(p) {
       });
       m.close();
       toast('Project updated', 'ok');
+      window.dispatchEvent(new CustomEvent('maia:projects-changed'));
       ctx.refresh();
       poll();
     } catch (e) { err.textContent = e.message; }
@@ -190,6 +194,7 @@ function projectSettings(p) {
       await del(`/api/projects/${p.id}`);
       m.close();
       toast('Project removed', 'ok');
+      window.dispatchEvent(new CustomEvent('maia:projects-changed'));
       if ((location.hash || '').includes(p.id)) location.hash = '#/';
       else ctx.refresh();
       poll();
@@ -234,11 +239,16 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => { /* offline file:// etc. */ });
 }
 
+// shell navigation events (sidebar + palette ask the owner screens to act)
+window.addEventListener('maia:add-project', () => dashboard.openAddProject(ctx));
+
 (async function boot() {
   const st = await fetchState().catch((e) => e);
   if (st && st.error && st.error.includes('token')) { await tokenGate(); }
   else if (st && !st.error) S.state = st;
   drawBanner(S.state || {});
+  initSidebar(ctx);
+  initPalette(ctx);
   renderQueued = true;
   await maybeRender();
   await poll();

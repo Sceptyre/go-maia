@@ -9,6 +9,7 @@ export function h(tag, props, ...children) {
       if (v === undefined || v === null) continue;
       if (k === 'class') el.className = v;
       else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k === 'html') el.innerHTML = v; // trusted constant markup (icons), never user data
       else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
       else if (k === 'value') el.value = v;
       else if (k === 'checked') el.checked = !!v;
@@ -56,6 +57,7 @@ export function modal({ title, body, actions, wide }) {
   const bodyEl = box.querySelector('.modal-body');
   if (body instanceof Node) bodyEl.appendChild(body);
   else if (body) bodyEl.appendChild(h('div', {}, body));
+  overlay.appendChild(box);
   document.body.appendChild(overlay);
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
