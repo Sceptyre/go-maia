@@ -10,7 +10,7 @@ export async function render(root, ctx) {
       h('h1', {}, 'Projects'),
       h('div', { class: 'muted sub' }, 'Supported repositories you manage change requests for')),
     h('div', { class: 'head-actions' },
-      h('button', { class: 'btn btn-primary', onclick: () => openAddProject(ctx) }, '+ Add project'),
+      h('button', { class: 'btn btn-primary', onclick: () => addProjectModal(ctx) }, '+ Add project'),
       h('button', { class: 'btn', title: 'Settings', onclick: () => { location.hash = '#/settings'; } }, '⚙')));
 
   const grid = h('div', { class: 'cards' }, h('div', { class: 'loading' }, spinner(), ' Loading projects…'));
