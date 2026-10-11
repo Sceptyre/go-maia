@@ -17,7 +17,7 @@ const S = { state: null, onJobEnd: null };
 let rendering = false, renderQueued = false;
 
 const ctx = {
-  get state() { return S.state || { projects: [], defaults: {} }; },
+  get state() { return S.state || { projects: [], defaults: {}, running_job: null, running_jobs: [] }; },
   get onJobEnd() { return S.onJobEnd; },
   set onJobEnd(fn) { S.onJobEnd = fn; },
   refresh: () => { renderQueued = true; maybeRender(); },
@@ -95,34 +95,30 @@ async function poll() {
   drawBanner(st);
   refreshSidebar();
 
-  const wasRunning = prev && prev.running_job;
-  const isRunning = st.running_job;
-  if (wasRunning && !isRunning && S.onJobEnd) {
+  const wasRunning = prev ? (prev.running_jobs || (prev.running_job ? [prev.running_job] : [])) : [];
+  const isRunning = st.running_jobs || (st.running_job ? [st.running_job] : []);
+  const before = new Set(wasRunning.map((job) => job.id));
+  const started = isRunning.some((job) => !before.has(job.id));
+  if (wasRunning.length && !isRunning.length && S.onJobEnd) {
     const fn = S.onJobEnd;
     S.onJobEnd = null;
     try { fn(); } catch (e) { /* screen changed */ }
   }
-  if (!wasRunning && isRunning) {
-    // started elsewhere (another tab / poller import queue)
-    window.dispatchEvent(new CustomEvent('maia:job-started'));
-  }
+  if (started) window.dispatchEvent(new CustomEvent('maia:job-started'));
 }
 
 function drawBanner(st) {
-  const j = st.running_job;
-  if (!j) { banner.className = 'banner hidden'; clear(banner); return; }
+  const jobs = st.running_jobs || (st.running_job ? [st.running_job] : []);
+  if (!jobs.length) { banner.className = 'banner hidden'; clear(banner); return; }
   clear(banner);
   banner.className = 'banner';
-  let href = '#/';
-  if (j.project_id) {
-    href = j.slug ? `#/p/${j.project_id}/cr/${j.slug}/run` : `#/p/${j.project_id}/issues`;
+  banner.append(spinner(), h('span', {}, `running ${jobs.length} command${jobs.length === 1 ? '' : 's'}:`));
+  for (const job of jobs) {
+    const href = job.project_id
+      ? job.slug ? `#/p/${job.project_id}/cr/${job.slug}/run` : `#/p/${job.project_id}/issues`
+      : '#/';
+    banner.append(h('a', { class: 'btn btn-tiny', href }, `${job.command}${job.slug ? ` · ${job.slug}` : ''}`));
   }
-  banner.append(
-    spinner(),
-    h('span', {}, `running: ${j.command}`),
-    j.slug ? h('span', { class: 'mono tiny' }, j.slug) : null,
-    h('span', { class: 'spacer' }),
-    h('a', { class: 'btn btn-tiny', href }, 'open'));
 }
 
 async function tokenGate() {

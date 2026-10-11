@@ -29,15 +29,23 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wtDir := filepath.Join(state.RepoWorktreeDirFor(p.Path), req.Slug)
-	if !state.HasWorktreeIn(wtDir) {
+	changes, err := state.SyncChangeRequests(p.Path)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var cr *state.ChangeRequest
+	for i := range changes {
+		if changes[i].Slug == req.Slug {
+			cr = &changes[i]
+			break
+		}
+	}
+	if cr == nil {
 		writeErr(w, http.StatusNotFound, "change request not found")
 		return
 	}
-
-	// Prefer the branch this CR was created from; fall back to the project default.
-	change, _ := os.ReadFile(filepath.Join(wtDir, state.StateDir, "change.md"))
-	base := frontmatterField(string(change), "source_branch")
+	base := cr.SourceBranch
 	if base == "" {
 		base = projectDefaultBranch(p.Path, p.BaseBranch)
 	}
@@ -50,7 +58,10 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 		baseRef = "origin/" + base
 	}
 
-	branch := "maia/" + req.Slug
+	branch := cr.Branch
+	if branch == "" {
+		branch = "maia/" + req.Slug
+	}
 	out, err := runGitIn(p.Path, "rev-list", "--count", baseRef+".."+branch)
 	if err != nil || strings.TrimSpace(string(out)) == "0" {
 		writeErr(w, http.StatusBadRequest,
@@ -72,7 +83,7 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 	// Defaults from the CR's change.md.
 	title := strings.TrimSpace(req.Title)
 	body := strings.TrimSpace(req.Body)
-	issueNum, crDesc := crMetadata(wtDir)
+	issueNum, crDesc := cr.Issue, cr.Description
 	if title == "" {
 		if crDesc != "" {
 			title = "maia: " + crDesc
@@ -92,28 +103,18 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "create draft PR: "+err.Error())
 		return
 	}
-	if issueNum > 0 || pr.Number > 0 {
-		recordPR(wtDir, pr.HTMLURL)
+	if err := state.UpdateChangePR(p.Path, cr.Slug, pr.HTMLURL); err != nil {
+		writeErr(w, http.StatusInternalServerError, "draft PR was created but state update failed: "+err.Error())
+		return
+	}
+	if cr.Worktree != nil {
+		recordPR(filepath.Join(cr.Worktree.Path, state.StateDir, "change.md"), pr.HTMLURL)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"pr": pr})
 }
 
-// crMetadata reads issue number + description from change.md frontmatter.
-func crMetadata(wtDir string) (issue int, description string) {
-	data, err := os.ReadFile(filepath.Join(wtDir, state.StateDir, "change.md"))
-	if err != nil {
-		return 0, ""
-	}
-	content := string(data)
-	if n := frontmatterField(content, "issue"); n != "" {
-		fmt.Sscanf(n, "%d", &issue)
-	}
-	return issue, frontmatterField(content, "description")
-}
-
-// recordPR stores `pr: <url>` in change.md frontmatter (best-effort).
-func recordPR(wtDir, url string) {
-	path := filepath.Join(wtDir, state.StateDir, "change.md")
+// recordPR stores `pr: <url>` in a materialized change.md file (best-effort).
+func recordPR(path, url string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

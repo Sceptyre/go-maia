@@ -30,6 +30,7 @@ async function renderList(root, ctx, pid) {
   }
 
   const cap = (ctx.state.defaults && ctx.state.defaults.max_active_worktrees) || 0;
+  const materialized = project.worktree_count || 0;
   const head = h('div', { class: 'page-head' },
     h('div', { class: 'crumbs' },
       h('a', { href: '#/', class: 'back' }, '← Projects'),
@@ -41,8 +42,9 @@ async function renderList(root, ctx, pid) {
       h('button', { class: 'btn btn-primary', onclick: () => newCRModal(ctx, pid) }, '+ New CR')));
   root.appendChild(head);
 
-  const running = ctx.state.running_job;
-  if (running && running.project_id === pid) {
+  const runningJobs = (ctx.state.running_jobs || (ctx.state.running_job ? [ctx.state.running_job] : []))
+    .filter((job) => job.project_id === pid);
+  for (const running of runningJobs) {
     root.appendChild(h('div', { class: 'notice' },
       `Running: ${running.command}`,
       running.slug ? ` — ${running.slug}` : '',
@@ -70,8 +72,8 @@ async function renderList(root, ctx, pid) {
     for (const [s, n] of Object.entries(counts).sort()) chipRow.appendChild(mk(`${s} ${n}`, s));
     if (cap > 0) {
       chipRow.appendChild(h('span', { class: 'spacer' }));
-      chipRow.appendChild(h('span', { class: 'muted tiny' + (crs.length >= cap ? ' warn' : '') },
-        `cap ${crs.length}/${cap}`));
+      chipRow.appendChild(h('span', { class: 'muted tiny' + (materialized >= cap ? ' warn' : '') },
+        `worktrees ${materialized}/${cap}`));
     }
   };
 
@@ -99,6 +101,7 @@ function crCard(c, pid) {
       h('div', { class: 'card-title' }, c.description || c.slug),
       h('span', { class: 'spacer' }),
       c.issue ? h('span', { class: 'chip chip-issue' }, `#${c.issue}`) : null,
+      !c.materialized ? h('span', { class: 'chip muted-chip' }, 'no worktree') : null,
       c.source_branch ? h('span', { class: 'chip' }, `from ${c.source_branch}`) : null,
       c.pr ? h('span', { class: 'chip chip-pr' }, 'PR ↗') : null,
       h('span', { class: 'chev' }, '›')),
@@ -116,10 +119,21 @@ async function newCRModal(ctx, pid) {
   const err = h('div', { class: 'error-text' });
   const go = async () => {
     try {
-      const job = await startJob(pid, { cmd: 'new', description: ta.value.trim(), base: source.value });
+      const cr = await post(`/api/projects/${pid}/change-requests`, {
+        description: ta.value.trim(), base: source.value,
+      });
       m.close();
-      toast('Creating change request…', 'ok');
-      location.hash = `#/p/${pid}/cr/${job.slug}/run`;
+      window.dispatchEvent(new CustomEvent('maia:projects-changed'));
+      try {
+        await post(`/api/projects/${pid}/worktrees/${cr.slug}/materialize`);
+        toast('Creating change request worktree…', 'ok');
+        await ctx.refreshState();
+        location.hash = `#/p/${pid}/cr/${cr.slug}/run`;
+      } catch (e) {
+        await ctx.refreshState();
+        toast(e.code === 409 ? 'Change request saved; materialize it when a worktree slot is free.' : e.message, e.code === 409 ? 'info' : 'err', 6000);
+        location.hash = `#/p/${pid}/cr/${cr.slug}/docs`;
+      }
     } catch (e) { err.textContent = e.message; }
   };
   const m = modal({
@@ -150,8 +164,9 @@ async function renderCR(root, ctx, pid, slug, tab) {
     return;
   }
   const cr = crs.find((c) => c.slug === slug);
-  const running = ctx.state.running_job;
-  const creating = !cr && running && running.slug === slug && running.kind === 'new';
+  const running = (ctx.state.running_jobs || (ctx.state.running_job ? [ctx.state.running_job] : []))
+    .find((job) => job.project_id === pid && job.slug === slug);
+  const creating = !cr && running && running.kind === 'new';
 
   if (!cr && !creating) {
     toast(`Change request not found: ${slug}`, 'err');
@@ -165,7 +180,30 @@ async function renderCR(root, ctx, pid, slug, tab) {
       cr ? h('h1', {}, cr.description || cr.slug) : h('h1', {}, 'Creating…'),
       cr ? h('span', { class: 'mono tiny muted' }, cr.slug) : null,
       cr && cr.source_branch ? h('span', { class: 'chip' }, `from ${cr.source_branch}`) : null),
-    h('div', { class: 'head-actions' }, cr ? statusBadge(cr.status) : spinner()));
+    h('div', { class: 'head-actions' },
+      cr ? statusBadge(cr.status) : spinner(),
+      cr && !cr.materialized ? h('button', {
+        class: 'btn btn-primary', disabled: !!running,
+        onclick: async () => {
+          try {
+            await post(`/api/projects/${pid}/worktrees/${slug}/materialize`);
+            toast('Materializing change request…', 'ok');
+            await ctx.refreshState();
+            location.hash = `#/p/${pid}/cr/${slug}/run`;
+          } catch (e) { toast(e.message, 'err'); }
+        },
+      }, running ? 'Materializing…' : 'Materialize worktree') : null,
+      cr && !cr.materialized ? h('button', {
+        class: 'btn btn-danger', disabled: !!running,
+        onclick: async () => {
+          if (!(await confirmModal(`Delete change request "${cr.description || slug}"? This cannot be undone.`))) return;
+          try {
+            await del(`/api/projects/${pid}/change-requests/${slug}`);
+            window.dispatchEvent(new CustomEvent('maia:projects-changed'));
+            location.hash = `#/p/${pid}`;
+          } catch (e) { toast(e.message, 'err'); }
+        },
+      }, 'Delete CR') : null));
 
   if (cr && cr.issue) {
     head.querySelector('.crumbs').appendChild(h('button', {
@@ -284,6 +322,10 @@ function drawEditor(root, pid, cr, raw) {
 
 async function renderDiff(root, pid, cr) {
   clear(root);
+  if (!cr.materialized) {
+    root.appendChild(emptyState('No worktree materialized', 'Materialize this change request to view its diff.'));
+    return;
+  }
   const bar = h('div', { class: 'editor-bar' },
     h('span', { class: 'muted' }, 'git status'),
     h('span', { class: 'spacer' }),
@@ -335,14 +377,21 @@ function diffBlock(title, text) {
 
 function renderRun(root, ctx, pid, cr) {
   const cons = consoleEl();
-  const running = ctx.state.running_job;
+  const runningJobs = ctx.state.running_jobs || (ctx.state.running_job ? [ctx.state.running_job] : []);
+  const running = runningJobs.find((job) => job.project_id === pid && job.slug === cr.slug);
+  const others = runningJobs.filter((job) => job.project_id !== pid || job.slug !== cr.slug);
 
-  if (running) {
-    const mine = running.project_id === pid && running.slug === cr.slug;
-    root.appendChild(h('div', { class: 'notice' + (mine ? '' : ' notice-dim') },
-      mine
-        ? `Running: ${running.command} — output below.`
-        : `A command is running globally: ${running.command}${running.slug ? ' (' + running.slug + ')' : ''} — wait for it to finish.`));
+  if (running) root.appendChild(h('div', { class: 'notice' }, `Running: ${running.command} — output below.`));
+  else if (others.length) root.appendChild(h('div', { class: 'notice notice-dim' },
+    `${others.length} command${others.length === 1 ? '' : 's'} running for other change requests; you can keep working here.`));
+
+  if (!cr.materialized) {
+    root.appendChild(emptyState('No worktree materialized', 'Materialize this change request before running maia commands.'));
+    if (running && running.kind === 'materialize') {
+      root.appendChild(cons.el);
+      cons.mount(running.id, { onEnd: () => ctx.refresh() });
+    }
+    return;
   }
 
   // action button: mkBody returns the request body, or null to abort.
@@ -413,7 +462,7 @@ function renderRun(root, ctx, pid, cr) {
       }),
       action('Cleanup', () => ({ cmd: 'cleanup' }), {
         danger: true,
-        confirmMsg: 'Delete this worktree and branch? Cannot be undone.',
+        confirmMsg: 'Detach this worktree? The change request and branch will be kept and can be materialized again.'
       }),
       prAction(ctx, pid, cr, running))));
 

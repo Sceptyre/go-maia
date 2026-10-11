@@ -29,8 +29,9 @@ type Server struct {
 	Version  string
 	registry *RegistryStore
 
-	cfgMu  sync.RWMutex
-	config configInfo
+	cfgMu      sync.RWMutex
+	worktreeMu sync.Mutex
+	config     configInfo
 }
 
 // New builds the server. token != "" requires auth on API requests (query
@@ -97,6 +98,9 @@ func (s *Server) Handler() http.Handler {
 
 	// Project-scoped workflow
 	mux.HandleFunc("GET /api/projects/{pid}/worktrees", s.handleListWorktrees)
+	mux.HandleFunc("POST /api/projects/{pid}/change-requests", s.handleCreateChangeRequest)
+	mux.HandleFunc("POST /api/projects/{pid}/worktrees/{slug}/materialize", s.handleMaterializeChangeRequest)
+	mux.HandleFunc("DELETE /api/projects/{pid}/change-requests/{slug}", s.handleDeleteChangeRequest)
 	mux.HandleFunc("GET /api/projects/{pid}/worktrees/{slug}/doc/{doc}", s.handleGetDoc)
 	mux.HandleFunc("PUT /api/projects/{pid}/worktrees/{slug}/doc/{doc}", s.handlePutDoc)
 	mux.HandleFunc("GET /api/projects/{pid}/worktrees/{slug}/diff", s.handleDiff)

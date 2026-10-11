@@ -38,8 +38,20 @@ func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, fmt.Sprintf("%s not found", doc))
-		return
+		cr, ok, stateErr := state.GetChangeRequest(p.Path, r.PathValue("slug"))
+		if stateErr != nil || !ok {
+			writeErr(w, http.StatusNotFound, fmt.Sprintf("%s not found", doc))
+			return
+		}
+		if doc == "change" {
+			data = []byte(cr.Change)
+		} else {
+			data = []byte(cr.Artifacts[doc])
+		}
+		if len(data) == 0 {
+			writeErr(w, http.StatusNotFound, fmt.Sprintf("%s not found", doc))
+			return
+		}
 	}
 	raw := string(data)
 	html, err := RenderMarkdown(raw)
@@ -65,8 +77,11 @@ func (s *Server) handlePutDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := os.Stat(filepath.Dir(path)); err != nil {
-		writeErr(w, http.StatusNotFound, "worktree not found")
-		return
+		cr, ok, stateErr := state.GetChangeRequest(p.Path, r.PathValue("slug"))
+		if stateErr != nil || !ok || cr.Worktree != nil {
+			writeErr(w, http.StatusNotFound, "change request not found")
+			return
+		}
 	}
 	var body struct {
 		Raw string `json:"raw"`
@@ -75,9 +90,22 @@ func (s *Server) handlePutDoc(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if err := os.WriteFile(path, []byte(body.Raw), 0644); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+	if _, err := os.Stat(filepath.Dir(path)); err == nil {
+		if err := os.WriteFile(path, []byte(body.Raw), 0644); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	slug := r.PathValue("slug")
+	if err := state.UpdateChangeDocument(p.Path, slug, body.Raw); err != nil {
+		if _, syncErr := state.SyncChangeRequests(p.Path); syncErr != nil {
+			writeErr(w, http.StatusInternalServerError, syncErr.Error())
+			return
+		}
+		if err := state.UpdateChangeDocument(p.Path, slug, body.Raw); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

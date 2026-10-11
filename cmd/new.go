@@ -37,11 +37,11 @@ var newCmd = &cobra.Command{
 			}
 		}
 
-		// Get repo-specific worktree directory
-		repoDir, err := state.GetRepoWorktreeDir()
+		repoRoot, err := state.RepositoryForWorktree(".")
 		if err != nil {
-			return fmt.Errorf("failed to get repo name: %w", err)
+			return err
 		}
+		repoDir := state.RepoWorktreeDirFor(repoRoot)
 
 		// Ensure repo directory exists
 		if err := os.MkdirAll(repoDir, 0755); err != nil {
@@ -49,6 +49,12 @@ var newCmd = &cobra.Command{
 		}
 
 		worktreePath := filepath.Join(repoDir, slug)
+
+		if _, exists, err := state.GetChangeRequest(repoRoot, slug); err != nil {
+			return err
+		} else if exists {
+			return fmt.Errorf("change request already exists: %s; run maia materialize %s to restore its worktree", slug, slug)
+		}
 
 		// Check if worktree already exists
 		if _, err := os.Stat(worktreePath); err == nil {
@@ -66,8 +72,9 @@ var newCmd = &cobra.Command{
 
 		// Create .maia/.generated/ directory structure
 		maiaDir := filepath.Join(worktreePath, state.StateDir)
-		generatedDir := filepath.Join(maiaDir, state.GeneratedDir)
+		generatedDir := filepath.Join(worktreePath, state.GetGeneratedDir())
 		if err := os.MkdirAll(generatedDir, 0755); err != nil {
+			_ = git.Remove(worktreePath)
 			return fmt.Errorf("failed to create .maia directory: %w", err)
 		}
 
@@ -82,7 +89,16 @@ source_branch: %s
 `, slug, description, sourceBranch)
 
 		if err := os.WriteFile(filepath.Join(maiaDir, "change.md"), []byte(changeMD), 0644); err != nil {
+			_ = git.Remove(worktreePath)
 			return fmt.Errorf("failed to create change.md: %w", err)
+		}
+		if err := state.SaveChangeRequest(state.ChangeRequest{
+			ProjectPath: repoRoot, Slug: slug, Description: description,
+			SourceBranch: sourceBranch, Status: "new", Change: changeMD,
+			Worktree: &state.ChangeWorktree{Path: worktreePath, Branch: branch},
+		}); err != nil {
+			_ = git.Remove(worktreePath)
+			return fmt.Errorf("save change request: %w", err)
 		}
 
 		fmt.Printf("\n✓ Change request created\n")

@@ -19,6 +19,8 @@ type apiError struct {
 	Error string `json:"error"`
 }
 
+var errWorktreeCapacity = fmt.Errorf("maximum materialized worktree limit reached")
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -45,42 +47,47 @@ type configInfo struct {
 
 // projectSummary is the dashboard card payload.
 type projectSummary struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Path       string         `json:"path"`
-	BaseBranch string         `json:"base_branch,omitempty"`
-	RemoteURL  string         `json:"remote_url,omitempty"`
-	AddedAt    time.Time      `json:"added_at"`
-	LastOpened time.Time      `json:"last_opened,omitempty"`
-	Github     GithubSettings `json:"github"`
-	CRCount    int            `json:"cr_count"`
-	Statuses   map[string]int `json:"statuses"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Path          string         `json:"path"`
+	BaseBranch    string         `json:"base_branch,omitempty"`
+	RemoteURL     string         `json:"remote_url,omitempty"`
+	AddedAt       time.Time      `json:"added_at"`
+	LastOpened    time.Time      `json:"last_opened,omitempty"`
+	Github        GithubSettings `json:"github"`
+	CRCount       int            `json:"cr_count"`
+	WorktreeCount int            `json:"worktree_count"`
+	Statuses      map[string]int `json:"statuses"`
 }
 
 func summarize(p *Project) projectSummary {
-	count, statuses := projectCRStats(p.Path)
+	count, worktrees, statuses := projectCRStats(p.Path)
 	return projectSummary{
 		ID: p.ID, Name: p.Name, Path: p.Path, BaseBranch: p.BaseBranch, RemoteURL: p.RemoteURL,
 		AddedAt: p.AddedAt, LastOpened: p.LastOpened, Github: p.Github,
-		CRCount: count, Statuses: statuses,
+		CRCount: count, WorktreeCount: worktrees, Statuses: statuses,
 	}
 }
 
-// projectCRStats counts a project's change requests by status.
-func projectCRStats(repoRoot string) (int, map[string]int) {
+// projectCRStats counts durable change requests separately from materialized worktrees.
+func projectCRStats(repoRoot string) (int, int, map[string]int) {
 	statuses := map[string]int{}
-	slugs, err := state.ListWorktreesIn(repoRoot)
+	changes, err := state.SyncChangeRequests(repoRoot)
 	if err != nil {
-		return 0, statuses
+		return 0, 0, statuses
 	}
-	for _, slug := range slugs {
-		status := "new"
-		if info, err := readWorktreeInfo(repoRoot, slug); err == nil && info.Status != "" {
-			status = info.Status
+	worktrees := 0
+	for _, cr := range changes {
+		status := cr.Status
+		if status == "" {
+			status = "new"
 		}
 		statuses[status]++
+		if cr.Worktree != nil {
+			worktrees++
+		}
 	}
-	return len(slugs), statuses
+	return len(changes), worktrees, statuses
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
@@ -89,25 +96,23 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	for i := range reg.Projects {
 		projects = append(projects, summarize(&reg.Projects[i]))
 	}
-	running, hasRunning := s.Jobs.Running()
+	runningJobs := s.Jobs.RunningAll()
+	var running any
+	if len(runningJobs) > 0 {
+		running = runningJobs[0]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ui":          reg.UI,
-		"defaults":    reg.Defaults,
-		"config":      s.currentConfig(),
-		"projects":    projects,
-		"running_job": jobOrNil(hasRunning, running),
+		"ui":           reg.UI,
+		"defaults":     reg.Defaults,
+		"config":       s.currentConfig(),
+		"projects":     projects,
+		"running_job":  running,
+		"running_jobs": runningJobs,
 		"server": map[string]any{
 			"version": s.Version,
 			"port":    s.Port,
 		},
 	})
-}
-
-func jobOrNil(has bool, j JobSummary) any {
-	if !has {
-		return nil
-	}
-	return j
 }
 
 // --- Projects ---
@@ -297,55 +302,55 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 
 type worktreeInfo struct {
 	Slug         string `json:"slug"`
-	Path         string `json:"path"`
+	Path         string `json:"path,omitempty"`
 	Status       string `json:"status"`
 	Description  string `json:"description,omitempty"`
 	HasMaia      bool   `json:"has_maia"`
 	HasChange    bool   `json:"has_change"`
 	HasResearch  bool   `json:"has_research"`
 	HasPlan      bool   `json:"has_plan"`
+	Materialized bool   `json:"materialized"`
 	Branch       string `json:"branch"`
 	SourceBranch string `json:"source_branch,omitempty"`
-	Issue        int    `json:"issue,omitempty"` // linked GitHub issue number
-	PR           string `json:"pr,omitempty"`    // draft PR URL once created
+	Issue        int    `json:"issue,omitempty"`
+	PR           string `json:"pr,omitempty"`
 }
 
-// worktreeInfo builds CR metadata for slug inside repoRoot's worktree dir.
+func changeRequestInfo(repoRoot string, cr state.ChangeRequest) worktreeInfo {
+	info := worktreeInfo{
+		Slug: cr.Slug, Status: cr.Status, Description: cr.Description,
+		HasChange: cr.Change != "", HasResearch: cr.Artifacts["research"] != "",
+		HasPlan: cr.Artifacts["plan"] != "", Branch: cr.Branch,
+		SourceBranch: cr.SourceBranch, Issue: cr.Issue, PR: cr.PR,
+	}
+	if cr.Worktree != nil {
+		info.Path = cr.Worktree.Path
+		_, statErr := os.Stat(cr.Worktree.Path)
+		info.Materialized = statErr == nil
+		info.HasMaia = state.HasWorktreeIn(cr.Worktree.Path)
+		if info.HasMaia {
+			info.HasChange = state.HasChangeFileIn(cr.Worktree.Path)
+			info.HasResearch = info.HasResearch || state.HasResearchIn(cr.Worktree.Path)
+			info.HasPlan = info.HasPlan || state.HasPlanIn(cr.Worktree.Path)
+		}
+	}
+	return info
+}
+
 func readWorktreeInfo(repoRoot, slug string) (worktreeInfo, error) {
 	if !slugRe.MatchString(slug) {
 		return worktreeInfo{}, fmt.Errorf("invalid slug: %q", slug)
 	}
-	path := filepath.Join(state.RepoWorktreeDirFor(repoRoot), slug)
-	info := worktreeInfo{
-		Slug:    slug,
-		Path:    path,
-		Branch:  "maia/" + slug,
-		HasMaia: state.HasWorktreeIn(path),
+	changes, err := state.SyncChangeRequests(repoRoot)
+	if err != nil {
+		return worktreeInfo{}, err
 	}
-	if !info.HasMaia {
-		return info, nil
-	}
-	info.HasChange = state.HasChangeFileIn(path)
-	info.HasResearch = state.HasResearchIn(path)
-	info.HasPlan = state.HasPlanIn(path)
-	if status, err := state.GetStatusIn(path); err == nil {
-		info.Status = status
-	} else {
-		info.Status = "new"
-	}
-	if info.HasChange {
-		if data, err := os.ReadFile(filepath.Join(path, state.StateDir, "change.md")); err == nil {
-			content := string(data)
-			info.Description = frontmatterField(content, "description")
-			info.SourceBranch = frontmatterField(content, "source_branch")
-
-			info.PR = frontmatterField(content, "pr")
-			if n := frontmatterField(content, "issue"); n != "" {
-				fmt.Sscanf(n, "%d", &info.Issue)
-			}
+	for _, cr := range changes {
+		if cr.Slug == slug {
+			return changeRequestInfo(repoRoot, cr), nil
 		}
 	}
-	return info, nil
+	return worktreeInfo{}, fmt.Errorf("change request not found: %s", slug)
 }
 
 func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
@@ -354,20 +359,122 @@ func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.registry.TouchOpened(p.ID)
-	slugs, err := state.ListWorktreesIn(p.Path)
+	changes, err := state.SyncChangeRequests(p.Path)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]worktreeInfo, 0, len(slugs))
-	for _, slug := range slugs {
-		info, err := readWorktreeInfo(p.Path, slug)
-		if err != nil {
-			continue
-		}
-		out = append(out, info)
+	out := make([]worktreeInfo, 0, len(changes))
+	for _, cr := range changes {
+		out = append(out, changeRequestInfo(p.Path, cr))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateChangeRequest(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Description string `json:"description"`
+		Base        string `json:"base"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	description := strings.TrimSpace(req.Description)
+	slug := generateSlug(description)
+	if description == "" || !slugRe.MatchString(slug) {
+		writeErr(w, http.StatusBadRequest, "description must contain letters or digits")
+		return
+	}
+	if _, err := state.SyncChangeRequests(p.Path); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing, found, err := state.GetChangeRequest(p.Path, slug); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if found {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("change request already exists: %s", existing.Slug))
+		return
+	}
+	base := strings.TrimSpace(req.Base)
+	if base == "" {
+		base = projectDefaultBranch(p.Path, p.BaseBranch)
+	}
+	base, err := resolveSourceBranch(p.Path, base)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	branch := "maia/" + slug
+	change := fmt.Sprintf("---\nname: %s\ndescription: %s\nstatus: new\nsource_branch: %s\n---\n\n", slug, description, base)
+	cr := state.ChangeRequest{
+		ProjectPath: p.Path, Slug: slug, Branch: branch,
+		Description: description, SourceBranch: base, Status: "new", Change: change,
+	}
+	if err := state.SaveChangeRequest(cr); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, changeRequestInfo(p.Path, cr))
+}
+
+func (s *Server) handleMaterializeChangeRequest(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	slug := r.PathValue("slug")
+	if !slugRe.MatchString(slug) {
+		writeErr(w, http.StatusBadRequest, "invalid slug")
+		return
+	}
+	changes, err := state.SyncChangeRequests(p.Path)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var change *state.ChangeRequest
+	for i := range changes {
+		if changes[i].Slug == slug {
+			change = &changes[i]
+			break
+		}
+	}
+	if change == nil {
+		writeErr(w, http.StatusNotFound, "change request not found")
+		return
+	}
+	if change.Worktree != nil {
+		writeErr(w, http.StatusConflict, "change request already has a worktree")
+		return
+	}
+	job, err := s.startMaterializeJob(p, slug, "materialize")
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job.summary())
+}
+
+func (s *Server) handleDeleteChangeRequest(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectFrom(w, r)
+	if !ok {
+		return
+	}
+	if _, err := state.SyncChangeRequests(p.Path); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := state.DeleteChangeRequest(p.Path, r.PathValue("slug")); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // --- Jobs ---
@@ -396,7 +503,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	var slug, command string
 	var argv []string
-	var post func(*Job) error
 
 	switch req.Cmd {
 	case "init", "plan", "cleanup":
@@ -466,9 +572,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, fmt.Sprintf("worktree already exists: %s", slug))
 			return
 		}
-		if err := s.checkCapacity(w, p); err != nil {
-			return
-		}
 		base := strings.TrimSpace(req.Base)
 		if base == "" {
 			base = projectDefaultBranch(p.Path, p.BaseBranch)
@@ -481,16 +584,42 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		base = resolvedBase
 		command = "new"
 		argv = []string{"new", desc, "--base", base}
-		post = func(*Job) error {
-			changeFile := filepath.Join(state.RepoWorktreeDirFor(p.Path), slug, state.StateDir, "change.md")
-			return setFrontmatterField(changeFile, "source_branch", base)
-		}
 
 	default:
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("unknown command: %q", req.Cmd))
 		return
 	}
+	if req.Cmd != "new" {
+		changes, err := state.SyncChangeRequests(p.Path)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		var change *state.ChangeRequest
+		for i := range changes {
+			if changes[i].Slug == slug {
+				change = &changes[i]
+				break
+			}
+		}
+		if change == nil {
+			writeErr(w, http.StatusNotFound, "change request not found")
+			return
+		}
+		if change.Worktree == nil && req.Cmd != "merge" {
+			writeErr(w, http.StatusConflict, "materialize this change request before running commands")
+			return
+		}
+	}
 
+	if req.Cmd == "new" {
+		s.worktreeMu.Lock()
+		if !s.hasWorktreeRoom(p) {
+			s.worktreeMu.Unlock()
+			writeErr(w, http.StatusConflict, errWorktreeCapacity.Error())
+			return
+		}
+	}
 	job, err := s.Jobs.Start(JobStart{
 		ProjectID: p.ID,
 		Slug:      slug,
@@ -498,30 +627,30 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Command:   command,
 		Dir:       p.Path,
 		Argv:      argv,
-		Post:      post,
 	})
+	if req.Cmd == "new" {
+		s.worktreeMu.Unlock()
+	}
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+
 	writeJSON(w, http.StatusAccepted, job.summary())
 }
 
-// checkCapacity enforces max_active_worktrees; writes 409 and returns an
-// error when the project is at capacity.
-func (s *Server) checkCapacity(w http.ResponseWriter, p *Project) error {
-	reg := s.registry.Get()
-	max := reg.Defaults.MaxActiveWorktrees
-	if max <= 0 {
-		return nil
+func (s *Server) reservedWorktreeCount(p *Project) int {
+	count := 0
+	for _, job := range s.Jobs.RunningAll() {
+		if job.ProjectID != p.ID || (job.Kind != "materialize" && job.Kind != "new") {
+			continue
+		}
+		cr, found, err := state.GetChangeRequest(p.Path, job.Slug)
+		if err != nil || !found || cr.Worktree == nil {
+			count++
+		}
 	}
-	count, _ := projectCRStats(p.Path)
-	if count >= max {
-		err := fmt.Errorf("at capacity: %d/%d active change requests — cleanup one or raise max_active_worktrees in Settings", count, max)
-		writeErr(w, http.StatusConflict, err.Error())
-		return err
-	}
-	return nil
+	return count
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {

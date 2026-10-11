@@ -59,6 +59,7 @@ function projectCard(p, ctx) {
     h('div', { class: 'card-path mono' }, p.remote_url || p.path),
     h('div', { class: 'card-row' },
       h('span', { class: 'cr-count' }, `${p.cr_count} CR${p.cr_count === 1 ? '' : 's'}`),
+      p.worktree_count !== undefined ? h('span', { class: 'chip' }, `${p.worktree_count} worktrees`) : null,
       statuses.slice(0, 4), gh,
       h('span', { class: 'spacer' }),
       h('span', { class: 'muted tiny' }, relTime(p.last_opened))),

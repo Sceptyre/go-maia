@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sceptyre/maia/internal/git"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -30,16 +29,27 @@ This is a destructive operation — commit all changes before merging.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var worktreePath string
-
+		var change *state.ChangeRequest
+		mainDir, err := state.RepositoryForWorktree(".")
+		if err != nil {
+			return err
+		}
 		if len(args) > 0 {
-			// Slug provided — resolve from parent repo
-			resolved, err := state.ValidateWorktreeExists(args[0])
-			if err != nil {
+			if found, ok, err := state.GetChangeRequest(mainDir, args[0]); err != nil {
 				return err
+			} else if ok {
+				change = found
+				if found.Worktree != nil {
+					worktreePath = found.Worktree.Path
+				}
+			} else {
+				resolved, err := state.ValidateWorktreeExists(args[0])
+				if err != nil {
+					return err
+				}
+				worktreePath = resolved
 			}
-			worktreePath = resolved
 		} else {
-			// No slug — assume CWD is the worktree (legacy behavior)
 			if !state.HasWorktree() {
 				return fmt.Errorf("not in a maia worktree. Provide a slug: maia merge <slug>")
 			}
@@ -48,20 +58,27 @@ This is a destructive operation — commit all changes before merging.`,
 				return err
 			}
 			worktreePath = cwd
+			root, err := state.RepositoryForWorktree(cwd)
+			if err != nil {
+				return err
+			}
+			mainDir = root
+			if found, ok, err := state.GetChangeRequest(root, filepath.Base(cwd)); err == nil && ok {
+				change = found
+			}
 		}
 
-		mainDir, err := git.GetMainDir()
-		if err != nil {
-			return err
+		branch := ""
+		if change != nil {
+			branch = change.Branch
 		}
-
-		// Get current branch of the worktree using git -C
-		getBranch := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
-		out, err := getBranch.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get branch for worktree: %w", err)
+		if branch == "" && worktreePath != "" {
+			out, err := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+			if err != nil {
+				return fmt.Errorf("failed to get branch for worktree: %w", err)
+			}
+			branch = strings.TrimSpace(string(out))
 		}
-		branch := strings.TrimSpace(string(out))
 
 		// Get the current branch in main repo
 		getMainBranch := exec.Command("git", "-C", mainDir, "rev-parse", "--abbrev-ref", "HEAD")
@@ -71,7 +88,10 @@ This is a destructive operation — commit all changes before merging.`,
 		}
 		mainBranch := strings.TrimSpace(string(mainOut))
 		sourceBranch := mergeBaseBranch
-		if sourceBranch == "" {
+		if sourceBranch == "" && change != nil {
+			sourceBranch = change.SourceBranch
+		}
+		if sourceBranch == "" && worktreePath != "" {
 			if data, err := os.ReadFile(filepath.Join(worktreePath, state.StateDir, "change.md")); err == nil {
 				for _, line := range strings.Split(string(data), "\n") {
 					if strings.HasPrefix(line, "source_branch:") {
@@ -99,16 +119,17 @@ This is a destructive operation — commit all changes before merging.`,
 			}
 		}
 
-		// Get description from change.md in the worktree
 		description := "change"
-		changeMDPath := filepath.Join(worktreePath, state.StateDir, "change.md")
-		changeMD, err := os.ReadFile(changeMDPath)
-		if err == nil {
-			lines := strings.Split(string(changeMD), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "description:") {
-					description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-					break
+		if change != nil && change.Description != "" {
+			description = change.Description
+		} else if worktreePath != "" {
+			changeMDPath := filepath.Join(worktreePath, state.StateDir, "change.md")
+			if changeMD, err := os.ReadFile(changeMDPath); err == nil {
+				for _, line := range strings.Split(string(changeMD), "\n") {
+					if strings.HasPrefix(line, "description:") {
+						description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+						break
+					}
 				}
 			}
 		}
@@ -131,7 +152,9 @@ This is a destructive operation — commit all changes before merging.`,
 		}
 
 		fmt.Println("\n✓ Changes merged to", mainBranch)
-		fmt.Printf("  Run 'maia cleanup %s' to remove the worktree\n", filepath.Base(worktreePath))
+		if worktreePath != "" {
+			fmt.Printf("  Run 'maia cleanup %s' to remove the worktree\n", filepath.Base(worktreePath))
+		}
 
 		return nil
 	},

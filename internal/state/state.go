@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	StateDir    = ".maia"
+	StateDir     = ".maia"
 	GeneratedDir = ".maia/.generated"
 )
 
@@ -108,19 +108,25 @@ func GetStatusIn(dir string) (string, error) {
 
 // SetStatusIn updates the status in plan.md (or change.md) under dir.
 func SetStatusIn(dir, status string) error {
-	// Try to update plan.md first
 	planPath := filepath.Join(dir, GetGeneratedDir(), "plan.md")
-	if _, err := os.Stat(planPath); err == nil {
-		return updateFrontmatterField(planPath, "status", status)
-	}
-
-	// Fall back to change.md
 	changePath := filepath.Join(dir, StateDir, "change.md")
-	if _, err := os.Stat(changePath); err == nil {
-		return updateFrontmatterField(changePath, "status", status)
+	var err error
+	if _, statErr := os.Stat(planPath); statErr == nil {
+		err = updateFrontmatterField(planPath, "status", status)
+	} else if _, statErr := os.Stat(changePath); statErr == nil {
+		err = updateFrontmatterField(changePath, "status", status)
+	} else {
+		return fmt.Errorf("no plan.md or change.md found")
 	}
-
-	return fmt.Errorf("no plan.md or change.md found")
+	if err != nil {
+		return err
+	}
+	repoRoot, err := RepositoryForWorktree(dir)
+	if err != nil {
+		return err
+	}
+	_, err = SyncChangeRequests(repoRoot)
+	return err
 }
 
 // EnsureGlobalDir creates ~/.maia/worktrees/
@@ -316,4 +322,3 @@ func listWorktreesInDir(dir string) ([]string, error) {
 	}
 	return worktrees, nil
 }
-

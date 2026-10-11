@@ -131,7 +131,7 @@ function defaultsCard(d, ctx) {
   };
 
   return section('Web defaults (all projects)',
-    field('Active worktree cap', cap, 'max_active_worktrees — 0 = unlimited. Auto-import stops at the cap; lazy materialization keeps the rest waiting in Issues.'),
+    field('Active worktree cap', cap, 'max_active_worktrees — 0 = unlimited. All CRs remain visible; this only limits materialized worktrees.'),
     field('Detection labels', labels, 'comma-separated; empty = every open issue'),
     field('Import mode', importMode, ''),
     field('Poll interval (min)', poll, 'background scan for labeled issues'),

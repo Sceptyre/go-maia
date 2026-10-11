@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sceptyre/maia/internal/state"
 )
 
 func TestResolveSourceBranchAndList(t *testing.T) {
@@ -68,6 +70,73 @@ func TestProjectBranchesEndpoint(t *testing.T) {
 	if res.Code != 200 || !strings.Contains(res.Body.String(), "feature/child") {
 		t.Fatalf("branches response: status %d body %s", res.Code, res.Body.String())
 	}
+}
+
+func TestChangeRequestListIncludesUnmaterializedRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := initTestRepo(t)
+	store := &RegistryStore{path: filepath.Join(home, "web.json"), reg: defaultRegistry()}
+	project, _, err := store.AddProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveChangeRequest(state.ChangeRequest{
+		ProjectPath: repo, Slug: "waiting", Branch: "maia/waiting",
+		Description: "waiting", SourceBranch: "main", Status: "new",
+		Change: "---\nname: waiting\nstatus: new\n---\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Jobs: NewJobManager(), registry: store}
+	req := httptest.NewRequest("GET", "/api/projects/"+project.ID+"/worktrees", nil)
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, req)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), `"slug":"waiting"`) || !strings.Contains(res.Body.String(), `"materialized":false`) {
+		t.Fatalf("change request response: status %d body %s", res.Code, res.Body.String())
+	}
+}
+
+func TestCreateChangeRequestPersistsWithoutWorktree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := initTestRepo(t)
+	store := &RegistryStore{path: filepath.Join(home, "web.json"), reg: defaultRegistry()}
+	project, _, err := store.AddProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Jobs: NewJobManager(), registry: store}
+	body := strings.NewReader(`{"description":"saved request","base":"main"}`)
+	req := httptest.NewRequest("POST", "/api/projects/"+project.ID+"/change-requests", body)
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, req)
+	if res.Code != 201 {
+		t.Fatalf("create status %d: %s", res.Code, res.Body.String())
+	}
+	cr, ok, err := state.GetChangeRequest(repo, "saved-request")
+	if err != nil || !ok || cr.Worktree != nil || cr.SourceBranch != "main" {
+		t.Fatalf("persisted change request: %+v ok=%v err=%v", cr, ok, err)
+	}
+
+	path := "/api/projects/" + project.ID + "/worktrees/saved-request/doc/change"
+	getReq := httptest.NewRequest("GET", path, nil)
+	getRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRes, getReq)
+	if getRes.Code != 200 || !strings.Contains(getRes.Body.String(), "saved request") {
+		t.Fatalf("detached change doc GET: status %d body %s", getRes.Code, getRes.Body.String())
+	}
+	putReq := httptest.NewRequest("PUT", path, strings.NewReader(`{"raw":"---\nname: saved-request\ndescription: edited while detached\nstatus: new\nsource_branch: main\n---\n\nupdated\n"}`))
+	putRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(putRes, putReq)
+	if putRes.Code != 200 {
+		t.Fatalf("detached change doc PUT: status %d body %s", putRes.Code, putRes.Body.String())
+	}
+	cr, _, _ = state.GetChangeRequest(repo, "saved-request")
+	if !strings.Contains(cr.Change, "edited while detached") || !strings.Contains(cr.Change, "updated") {
+		t.Fatalf("detached edit not persisted: %q", cr.Change)
+	}
+
 }
 
 func TestValidateRemoteURL(t *testing.T) {

@@ -3,8 +3,6 @@ package web
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,8 +15,9 @@ import (
 // issueView is a GitHub issue plus its import state.
 type issueView struct {
 	github.Issue
-	ImportedSlug   string `json:"imported_slug,omitempty"`
-	ImportedStatus string `json:"imported_status,omitempty"`
+	ImportedSlug         string `json:"imported_slug,omitempty"`
+	ImportedStatus       string `json:"imported_status,omitempty"`
+	ImportedMaterialized bool   `json:"imported_materialized,omitempty"`
 }
 
 // issuesResponse is the payload for the issues screen.
@@ -30,24 +29,16 @@ type issuesResponse struct {
 	Queued   int         `json:"queued,omitempty"` // set by scan when auto-import queued imports
 }
 
-// importedIssues maps GitHub issue number → CR slug via change.md frontmatter
-// (the dedup record for imports; survives restarts, no side database).
+// importedIssues maps linked GitHub issues to durable CR records, even after cleanup.
 func importedIssues(repoRoot string) map[int]string {
 	out := map[int]string{}
-	slugs, err := state.ListWorktreesIn(repoRoot)
+	changes, err := state.SyncChangeRequests(repoRoot)
 	if err != nil {
 		return out
 	}
-	for _, slug := range slugs {
-		path := filepath.Join(state.RepoWorktreeDirFor(repoRoot), slug, state.StateDir, "change.md")
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		if n := frontmatterField(string(data), "issue"); n != "" {
-			if num, err := strconv.Atoi(n); err == nil {
-				out[num] = slug
-			}
+	for _, cr := range changes {
+		if cr.Issue > 0 {
+			out[cr.Issue] = cr.Slug
 		}
 	}
 	return out
@@ -104,11 +95,20 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	imported := importedIssues(p.Path)
+	imported := map[int]string{}
 	statuses := map[string]string{}
-	for _, slug := range imported {
-		if info, err := readWorktreeInfo(p.Path, slug); err == nil {
-			statuses[slug] = info.Status
+	materialized := map[string]bool{}
+	changes, err := state.SyncChangeRequests(p.Path)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, cr := range changes {
+		if cr.Issue > 0 {
+			imported[cr.Issue] = cr.Slug
+			info := changeRequestInfo(p.Path, cr)
+			statuses[cr.Slug] = info.Status
+			materialized[cr.Slug] = info.Materialized
 		}
 	}
 	for _, is := range issues {
@@ -116,6 +116,7 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		if slug, ok := imported[is.Number]; ok {
 			v.ImportedSlug = slug
 			v.ImportedStatus = statuses[slug]
+			v.ImportedMaterialized = materialized[slug]
 		}
 		resp.Issues = append(resp.Issues, v)
 	}
@@ -156,7 +157,7 @@ func (s *Server) handleScanIssues(w http.ResponseWriter, r *http.Request) {
 		resp.Issues = append(resp.Issues, v)
 	}
 	if p.Github.ImportMode == "auto" {
-		resp.Queued = s.queueImports(p, issues, imported)
+		resp.Queued = s.queueImports(p, issues)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -169,9 +170,6 @@ func (s *Server) handleImportIssue(w http.ResponseWriter, r *http.Request) {
 	num, err := strconv.Atoi(r.PathValue("num"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad issue number")
-		return
-	}
-	if err := s.checkCapacity(w, p); err != nil {
 		return
 	}
 	issues, err := client.ListOpenIssues(repo, effectiveLabels(p, s.registry.Get()))
@@ -190,11 +188,20 @@ func (s *Server) handleImportIssue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("issue #%d not found (or missing label %v)", num, effectiveLabels(p, s.registry.Get())))
 		return
 	}
-	if slug, ok := importedIssues(p.Path)[num]; ok {
+	slug, created, err := s.ensureIssueChangeRequest(p, target)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !created {
 		writeErr(w, http.StatusConflict, fmt.Sprintf("issue #%d already imported as %s", num, slug))
 		return
 	}
-	job, err := s.startImportJob(p, target)
+	job, err := s.startMaterializeJob(p, slug, fmt.Sprintf("materialize issue #%d", num))
+	if err == errWorktreeCapacity {
+		writeJSON(w, http.StatusCreated, map[string]any{"slug": slug, "materialized": false})
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -202,108 +209,84 @@ func (s *Server) handleImportIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, job.summary())
 }
 
-// queueImports materializes up to the worktree cap, chaining on the global
-// single-flight queue. Returns how many were queued.
-func (s *Server) queueImports(p *Project, issues []github.Issue, imported map[int]string) int {
+// queueImports records every detected issue and materializes worktrees up to the cap.
+func (s *Server) queueImports(p *Project, issues []github.Issue) int {
 	sort.Slice(issues, func(i, j int) bool { return issues[i].Number < issues[j].Number })
-	var pending []github.Issue
+	queued := 0
 	for _, is := range issues {
-		if _, done := imported[is.Number]; !done {
-			pending = append(pending, is)
+		slug, created, err := s.ensureIssueChangeRequest(p, &is)
+		if err != nil {
+			continue
+		}
+		if created {
+			queued++
+		}
+		cr, found, err := state.GetChangeRequest(p.Path, slug)
+		if err != nil || !found || cr.Worktree != nil {
+			continue
+		}
+		if _, err := s.startMaterializeJob(p, slug, fmt.Sprintf("materialize issue #%d", is.Number)); err == nil && !created {
+			queued++
 		}
 	}
-	if len(pending) == 0 {
-		return 0
-	}
-	room := s.capacityRoom(p)
-	if room <= 0 {
-		return 0
-	}
-	if len(pending) > room {
-		pending = pending[:room]
-	}
-	go func() {
-		for _, is := range pending {
-			for {
-				if s.capacityRoom(p) <= 0 {
-					return
-				}
-				// Re-check dedup: an earlier queued import may have landed.
-				if _, done := importedIssues(p.Path)[is.Number]; done {
-					break
-				}
-				job, err := s.startImportJob(p, &is)
-				if err == nil {
-					<-job.Done()
-					break
-				}
-				if strings.Contains(err.Error(), "already running") {
-					time.Sleep(1500 * time.Millisecond)
-					continue
-				}
-				return // capacity or validation error: stop this round
-			}
-		}
-	}()
-	return len(pending)
+	return queued
 }
 
-// capacityRoom returns how many more CRs may be materialized (0 = unlimited
-// when max_active_worktrees <= 0).
-func (s *Server) capacityRoom(p *Project) int {
-	max := s.registry.Get().Defaults.MaxActiveWorktrees
-	if max <= 0 {
-		return 1 << 30
+func (s *Server) ensureIssueChangeRequest(p *Project, is *github.Issue) (string, bool, error) {
+	changes, err := state.SyncChangeRequests(p.Path)
+	if err != nil {
+		return "", false, err
 	}
-	count, _ := projectCRStats(p.Path)
-	return max - count
-}
-
-// startImportJob runs `maia new` for an issue, then writes change.md with
-// issue metadata in a post-step (runs only on success).
-func (s *Server) startImportJob(p *Project, is *github.Issue) (*Job, error) {
-	before := map[string]bool{}
-	if slugs, err := state.ListWorktreesIn(p.Path); err == nil {
-		for _, sl := range slugs {
-			before[sl] = true
+	for _, cr := range changes {
+		if cr.Issue == is.Number {
+			return cr.Slug, false, nil
 		}
 	}
 	desc := fmt.Sprintf("%s #%d", is.Title, is.Number)
+	slug := generateSlug(desc)
+	if existing, found, err := state.GetChangeRequest(p.Path, slug); err != nil {
+		return "", false, err
+	} else if found {
+		if existing.Issue == is.Number {
+			return slug, false, nil
+		}
+		return "", false, fmt.Errorf("change request slug already exists: %s", slug)
+	}
 	base, err := resolveSourceBranch(p.Path, projectDefaultBranch(p.Path, p.BaseBranch))
 	if err != nil {
-		return nil, fmt.Errorf("cannot import issue #%d: %w", is.Number, err)
+		return "", false, fmt.Errorf("cannot import issue #%d: %w", is.Number, err)
 	}
-
-	post := func(j *Job) error {
-		actual := ""
-		if slugs, err := state.ListWorktreesIn(p.Path); err == nil {
-			for _, sl := range slugs {
-				if !before[sl] {
-					actual = sl
-					break
-				}
-			}
-		}
-		if actual == "" {
-			return fmt.Errorf("worktree for issue #%d not found after maia new", is.Number)
-		}
-		path := filepath.Join(state.RepoWorktreeDirFor(p.Path), actual, state.StateDir, "change.md")
-		if err := os.WriteFile(path, []byte(issueChangeMD(is, actual, base)), 0644); err != nil {
-			return err
-		}
-		j.append("line", fmt.Sprintf("✓ change.md created for issue #%d → %s", is.Number, actual))
-		return nil
+	contents := issueChangeMD(is, slug, base)
+	if err := state.SaveChangeRequest(state.ChangeRequest{
+		ProjectPath: p.Path, Slug: slug, Branch: "maia/" + slug,
+		Description: is.Title, SourceBranch: base, Status: "new", Issue: is.Number,
+		Change: contents,
+	}); err != nil {
+		return "", false, err
 	}
+	return slug, true, nil
+}
 
+func (s *Server) startMaterializeJob(p *Project, slug, command string) (*Job, error) {
+	s.worktreeMu.Lock()
+	defer s.worktreeMu.Unlock()
+	if !s.hasWorktreeRoom(p) {
+		return nil, errWorktreeCapacity
+	}
 	return s.Jobs.Start(JobStart{
-		ProjectID: p.ID,
-		Slug:      "", // actual slug is discovered by the post-step
-		Kind:      "import",
-		Command:   fmt.Sprintf("import #%d", is.Number),
-		Dir:       p.Path,
-		Argv:      []string{"new", desc, "--base", base},
-		Post:      post,
+		ProjectID: p.ID, Slug: slug, Kind: "materialize", Command: command,
+		Dir: p.Path, Argv: []string{"materialize", slug},
 	})
+}
+
+func (s *Server) hasWorktreeRoom(p *Project) bool {
+	max := s.registry.Get().Defaults.MaxActiveWorktrees
+	if max <= 0 {
+		return true
+	}
+	_, count, _ := projectCRStats(p.Path)
+	count += s.reservedWorktreeCount(p)
+	return count < max
 }
 
 // issueChangeMD renders the change.md template for a GitHub issue.
@@ -334,7 +317,7 @@ url: %s
 ## Requirements
 
 - Implements #%d (imported from GitHub — keep this reference)
-`, slug, is.Title, sourceBranch, is.Number, is.HTMLURL, body, is.Number)
+`, slug, title, sourceBranch, is.Number, is.HTMLURL, body, is.Number)
 }
 
 // startPoller scans each project for labeled issues on its interval; auto
@@ -386,6 +369,6 @@ func (s *Server) scanProject(p *Project) {
 		return
 	}
 	if p.Github.ImportMode == "auto" {
-		s.queueImports(p, issues, importedIssues(p.Path))
+		s.queueImports(p, issues)
 	}
 }

@@ -192,8 +192,8 @@ function buildBody(mode) {
         }
         for (const cr of crs) {
           crBox.appendChild(navRow({
-            to: `#/p/${proj.id}/cr/${cr.slug}/docs`, label: cr.slug,
-            title: `${cr.slug} — ${cr.status}`, indent: true,
+            to: `#/p/${proj.id}/cr/${cr.slug}/docs`, label: cr.materialized ? cr.slug : `${cr.slug} · no worktree`,
+            title: `${cr.slug} — ${cr.status}${cr.materialized ? '' : ' · no worktree'}`, indent: true,
             active: hash.includes(`/cr/${cr.slug}`),
           }));
         }

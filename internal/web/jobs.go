@@ -149,18 +149,17 @@ func (j *Job) isDone() bool {
 	return j.done
 }
 
-// JobManager runs at most one command at a time and keeps job history. It is
-// shared across projects (LLM cost + git safety), with jobs tagged by project.
+// JobManager allows one command at a time per change request and keeps job history.
 type JobManager struct {
-	mu      sync.Mutex
-	jobs    map[string]*Job
-	order   []string // job IDs, oldest first
-	current string   // running job ID, "" if idle
-	seq     int
+	mu             sync.Mutex
+	jobs           map[string]*Job
+	order          []string // job IDs, oldest first
+	runningByScope map[string]string
+	seq            int
 }
 
 func NewJobManager() *JobManager {
-	return &JobManager{jobs: make(map[string]*Job)}
+	return &JobManager{jobs: make(map[string]*Job), runningByScope: make(map[string]string)}
 }
 
 // JobStart describes a command to run as a job.
@@ -172,26 +171,20 @@ type JobStart struct {
 	Dir       string // working directory
 	Exe       string // "" = the maia binary itself
 	Argv      []string
-	// Post runs after a successful exit, before the job is marked done; its
-	// error (if any) flips the job to "error". Used by issue import to write
-	// change.md after `maia new` creates the worktree.
-	Post func(j *Job) error
 }
 
 // Start launches the command described by opts. The maia binary is prepended
 // unless opts.Exe names another program (e.g. "gh").
 func (m *JobManager) Start(opts JobStart) (*Job, error) {
+	scope := opts.ProjectID + "\x00" + opts.Slug
+	if opts.Slug == "" {
+		scope += "\x00" + opts.Command
+	}
 	m.mu.Lock()
-	if m.current != "" {
-		cur := m.jobs[m.current]
-		cur.mu.Lock()
-		done := cur.done
-		cur.mu.Unlock()
-		if !done {
-			kind, slug := cur.Kind, cur.Slug
-			m.mu.Unlock()
-			return nil, fmt.Errorf("another maia command is already running: %s (%s)", kind, slug)
-		}
+	if id := m.runningByScope[scope]; id != "" {
+		cur := m.jobs[id]
+		m.mu.Unlock()
+		return nil, fmt.Errorf("a command is already running for this change request: %s (%s)", cur.Command, cur.Slug)
 	}
 
 	m.seq++
@@ -208,12 +201,12 @@ func (m *JobManager) Start(opts JobStart) (*Job, error) {
 	}
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
-	m.current = job.ID
+	m.runningByScope[scope] = job.ID
 	m.pruneLocked()
 	m.mu.Unlock()
 
 	fail := func(err error) (*Job, error) {
-		m.clearCurrent(job.ID)
+		m.clearRunning(scope, job.ID)
 		job.finish("error", 1)
 		return nil, err
 	}
@@ -276,24 +269,17 @@ func (m *JobManager) Start(opts JobStart) (*Job, error) {
 			status = "canceled"
 		}
 		job.mu.Unlock()
-		if status == "ok" && opts.Post != nil {
-			if err := opts.Post(job); err != nil {
-				status = "error"
-				exitCode = 1
-				job.append("line", "post-step failed: "+err.Error())
-			}
-		}
 		job.finish(status, exitCode)
-		m.clearCurrent(job.ID)
+		m.clearRunning(scope, job.ID)
 	}()
 
 	return job, nil
 }
 
-func (m *JobManager) clearCurrent(id string) {
+func (m *JobManager) clearRunning(scope, id string) {
 	m.mu.Lock()
-	if m.current == id {
-		m.current = ""
+	if m.runningByScope[scope] == id {
+		delete(m.runningByScope, scope)
 	}
 	m.mu.Unlock()
 }
@@ -309,12 +295,20 @@ func pump(r io.Reader, job *Job) {
 func (m *JobManager) pruneLocked() {
 	const keep = 20
 	for len(m.order) > keep {
-		id := m.order[0]
-		if id == m.current {
+		removed := false
+		for i, id := range m.order {
+			job := m.jobs[id]
+			if job != nil && !job.isDone() {
+				continue
+			}
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			delete(m.jobs, id)
+			removed = true
 			break
 		}
-		m.order = m.order[1:]
-		delete(m.jobs, id)
+		if !removed {
+			return
+		}
 	}
 }
 
@@ -326,18 +320,32 @@ func (m *JobManager) Get(id string) (*Job, bool) {
 	return j, ok
 }
 
-// Running returns the currently running job summary, if any.
+// Running returns the newest running job summary, if any.
 func (m *JobManager) Running() (JobSummary, bool) {
+	jobs := m.RunningAll()
+	if len(jobs) == 0 {
+		return JobSummary{}, false
+	}
+	return jobs[0], true
+}
+
+func (m *JobManager) RunningAll() []JobSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.current == "" {
-		return JobSummary{}, false
+	active := make(map[string]bool, len(m.runningByScope))
+	for _, id := range m.runningByScope {
+		active[id] = true
 	}
-	j, ok := m.jobs[m.current]
-	if !ok {
-		return JobSummary{}, false
+	out := make([]JobSummary, 0, len(active))
+	for i := len(m.order) - 1; i >= 0; i-- {
+		id := m.order[i]
+		if active[id] {
+			if job := m.jobs[id]; job != nil {
+				out = append(out, job.summary())
+			}
+		}
 	}
-	return j.summary(), true
+	return out
 }
 
 // List returns all retained jobs, newest first.

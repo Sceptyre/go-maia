@@ -292,15 +292,16 @@ maia merge
 
 | Command | Description |
 |---------|-------------|
-| `maia new "description"` | Create an isolated worktree with a `change.md` template |
-| `maia list` | List active worktrees for the current repository |
+| `maia new "description"` | Create a persistent change request and materialize its worktree |
+| `maia materialize <slug>` | Create or restore a CR's worktree from its saved source branch |
+| `maia list` | List all change requests and their worktree state for the current repository |
 | `maia init` | Research the codebase and web → `research.md` |
 | `maia plan` | Generate a phased implementation plan → `plan.md` |
-| `maia show <plan\|research>` | Display the contents of a generated document |
+| `maia show <plan\|research\|change> [slug]` | Display generated docs or a saved change request |
 | `maia steer "feedback"` | Revise the plan based on your feedback |
 | `maia apply` | Execute the implementation plan |
-| `maia merge` | Merge the worktree branch back to main |
-| `maia cleanup` | Remove a worktree |
+| `maia merge <slug>` | Merge the CR branch into its source branch, even after cleanup |
+| `maia cleanup <slug>` | Detach a worktree while retaining the CR and its saved docs |
 | `maia config` | Show current configuration and value sources |
 | `maia web` | Start the local web UI |
 
@@ -344,18 +345,21 @@ maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
 
 - **Projects dashboard** — every supported repository with its path, open
   change-request count, and last GitHub scan
-- **Change requests** — each repo's CRs with status badges; create a CR from
-  any local or origin branch. Imported GitHub issues use the configured/default
-  origin branch automatically, so additional CRs can branch from earlier work.
-  The **Issues** screen auto-detects open issues labeled `maia` and imports one
-  as a worktree + `change.md` (lazy materialization, capped by `max_active_worktrees`)
+- **Change requests** — durable records in `~/.maia/changes.json`, independent
+  of their optional worktrees. Create from any local or origin branch; issue
+  imports use the configured/default origin branch and remain visible while
+  awaiting a worktree slot. `max_active_worktrees` limits materialized worktrees,
+  not the number of CR records.
+- **Worktree lifecycle** — Cleanup detaches a worktree but preserves `change.md`,
+  generated docs, issue/PR links, branch, and status in the CR record. Use
+  `maia materialize <slug>` (or the UI button) to restore it later.
 - **CR detail** — Docs (edit `change.md`, read rendered `research.md`/`plan.md`),
   Diff (worktree changes), and Run (streaming job console over SSE)
 - **Settings** — one master config (`~/.maia/web.json`) for the server, global
   defaults (worktree cap, detection labels, import mode, poll interval), and
   `~/.maia/config.json` (model, API keys) — editable from the admin dashboard
 - **Actions** — Init, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup, Draft
-  PR; one AI command runs at a time, cancelable from the console
+  PR; only one command per CR at a time, while different CRs can run concurrently.
 - **GitHub** — auth via the `gh` CLI, then `GH_TOKEN`/`GITHUB_TOKEN`, then the
   Settings token; draft PRs are opened from the browser
 - **Security** — binds to `127.0.0.1` only by default. A non-loopback `--addr`

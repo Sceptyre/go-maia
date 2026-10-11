@@ -37,7 +37,6 @@ export async function render(root, ctx) {
     return;
   }
 
-  const cap = (ctx.state.defaults && ctx.state.defaults.max_active_worktrees) || 0;
   const header = h('div', { class: 'issue-toolbar' },
     h('span', { class: 'chip chip-gh' }, data.repo),
     h('span', { class: 'muted tiny' }, `${data.auth.login} via ${data.auth.source}`),
@@ -71,32 +70,35 @@ export async function render(root, ctx) {
     return;
   }
 
-  const capFull = cap > 0 && (ctx.state.projects || [])
-    .find((p) => p.id === pid) && ctx.state.projects.find((p) => p.id === pid).cr_count >= cap;
-
   const list = h('div', { class: 'cards' });
   for (const is of data.issues) {
-    list.appendChild(issueCard(pid, is, capFull, ctx));
+    list.appendChild(issueCard(pid, is, ctx));
   }
   body.appendChild(list);
 }
 
-function issueCard(pid, is, capFull, ctx) {
+function issueCard(pid, is, ctx) {
   const labels = (is.labels || []).map((l) => h('span', { class: 'chip' }, l.name));
   const right = is.imported_slug
     ? h('button', {
         class: 'btn btn-tiny',
         onclick: () => { location.hash = `#/p/${pid}/cr/${is.imported_slug}`; },
-      }, is.imported_status ? ['open · ', statusBadge(is.imported_status)] : 'open')
+      }, !is.imported_materialized ? 'open · no worktree' : is.imported_status ? ['open · ', statusBadge(is.imported_status)] : 'open')
     : h('button', {
         class: 'btn btn-tiny btn-primary',
-        title: capFull ? 'At max_active_worktrees — cleanup a CR first' : 'Materialize a worktree + change.md for this issue',
+        title: 'Create a change request from this issue',
         onclick: async (e) => {
           const b = e.currentTarget;
           b.disabled = true;
           try {
-            await post(`/api/projects/${pid}/issues/${is.number}/import`);
-            toast(`Importing #${is.number} — worktree is being created…`, 'ok');
+            const result = await post(`/api/projects/${pid}/issues/${is.number}/import`);
+            if (result.materialized === false) {
+              toast(`Imported #${is.number} as a change request; a worktree can be created when a slot is free.`, 'ok', 6000);
+              await ctx.refreshState();
+              ctx.refresh();
+              return;
+            }
+            toast(`Materializing #${is.number}…`, 'ok');
             window.dispatchEvent(new CustomEvent('maia:job-started'));
             const prev = ctx.onJobEnd;
             ctx.onJobEnd = () => { if (prev) prev(); ctx.refresh(); };
@@ -105,8 +107,7 @@ function issueCard(pid, is, capFull, ctx) {
             toast(er.message, 'err', 6000);
           }
         },
-        disabled: !!capFull,
-      }, capFull ? 'at cap' : 'Import');
+      }, 'Import');
 
   return h('div', { class: 'card card-issue' },
     h('div', { class: 'card-top' },
