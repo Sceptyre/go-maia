@@ -294,6 +294,7 @@ maia merge
 |---------|-------------|
 | `maia new "description"` | Create a persistent change request and materialize its worktree |
 | `maia materialize <slug>` | Create or restore a CR's worktree from its saved source branch |
+| `maia update-base <slug>` | Rebase the CR onto the latest source branch; supports `--continue`/`--abort` |
 | `maia list` | List all change requests and their worktree state for the current repository |
 | `maia init` | Research the codebase and web → `research.md` |
 | `maia plan` | Generate a phased implementation plan → `plan.md` |
@@ -359,7 +360,7 @@ maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
   defaults (worktree cap, detection labels, import mode, poll interval), and
   `~/.maia/config.json` (model, API keys) — editable from the admin dashboard
 - **Actions** — Init, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup, Draft
-  PR; only one command per CR at a time, while different CRs can run concurrently.
+  PR and Update from source; CR branches can be rebased onto their latest source, with conflicts resolved in that CR's worktree. Only one command per CR runs at a time, while different CRs can run concurrently.
 - **GitHub** — auth via the `gh` CLI, then `GH_TOKEN`/`GITHUB_TOKEN`, then the
   Settings token; draft PRs are opened from the browser
 - **Security** — binds to `127.0.0.1` only by default. A non-loopback `--addr`

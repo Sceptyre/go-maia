@@ -21,19 +21,20 @@ type ChangeWorktree struct {
 
 // ChangeRequest is durable maia intent; its worktree is an optional checkout.
 type ChangeRequest struct {
-	ProjectPath  string            `json:"project_path"`
-	Slug         string            `json:"slug"`
-	Branch       string            `json:"branch"`
-	Description  string            `json:"description"`
-	SourceBranch string            `json:"source_branch,omitempty"`
-	Status       string            `json:"status"`
-	Issue        int               `json:"issue,omitempty"`
-	PR           string            `json:"pr,omitempty"`
-	Change       string            `json:"change"`
-	Artifacts    map[string]string `json:"artifacts,omitempty"`
-	Worktree     *ChangeWorktree   `json:"worktree,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ProjectPath    string            `json:"project_path"`
+	Slug           string            `json:"slug"`
+	Branch         string            `json:"branch"`
+	Description    string            `json:"description"`
+	SourceBranch   string            `json:"source_branch,omitempty"`
+	Status         string            `json:"status"`
+	Issue          int               `json:"issue,omitempty"`
+	PR             string            `json:"pr,omitempty"`
+	RebaseConflict bool              `json:"rebase_conflict,omitempty"`
+	Change         string            `json:"change"`
+	Artifacts      map[string]string `json:"artifacts,omitempty"`
+	Worktree       *ChangeWorktree   `json:"worktree,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 type changeFile struct {
@@ -232,6 +233,13 @@ func setFrontmatterFieldContent(content, key, value string) string {
 	return content
 }
 
+func UpdateChangeRebaseConflict(projectPath, slug string, conflicted bool) error {
+	return updateChangeRequest(projectPath, slug, func(cr *ChangeRequest) error {
+		cr.RebaseConflict = conflicted
+		return nil
+	})
+}
+
 func UpdateChangeStatus(projectPath, slug, status string) error {
 	return updateChangeRequest(projectPath, slug, func(cr *ChangeRequest) error {
 		cr.Status = status
@@ -311,9 +319,13 @@ func SyncChangeRequests(projectPath string) ([]ChangeRequest, error) {
 		if cr.CreatedAt.IsZero() {
 			cr.CreatedAt = time.Now().UTC()
 		}
-		cr.Branch = "maia/" + slug
+		if cr.Branch == "" {
+			cr.Branch = "maia/" + slug
+		}
 		if branch, err := exec.Command("git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
-			cr.Branch = strings.TrimSpace(string(branch))
+			if actual := strings.TrimSpace(string(branch)); actual != "" && actual != "HEAD" {
+				cr.Branch = actual
+			}
 		}
 
 		for _, artifact := range []string{"research", "plan"} {

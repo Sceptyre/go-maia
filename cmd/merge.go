@@ -68,6 +68,9 @@ This is a destructive operation — commit all changes before merging.`,
 			}
 		}
 
+		if change != nil && change.RebaseConflict {
+			return fmt.Errorf("resolve or abort the update-base rebase before merging %s", change.Slug)
+		}
 		branch := ""
 		if change != nil {
 			branch = change.Branch

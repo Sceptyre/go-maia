@@ -41,6 +41,7 @@ Workflow (from parent branch — never leave it):
   maia new "description"       # Create CR + materialize worktree
   maia list                    # Show all CRs and materialized worktrees
   maia materialize <slug>      # Restore a cleaned-up CR worktree
+  maia update-base <slug>      # Rebase its worktree onto the latest source branch
   maia edit <slug>             # Edit change.md ($EDITOR or pipe)
   maia show change <slug>      # View change request
   maia diff <slug>             # View uncommitted changes

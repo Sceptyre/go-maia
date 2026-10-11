@@ -45,6 +45,11 @@ func (s *Server) handleCreatePR(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change request not found")
 		return
 	}
+	if cr.RebaseConflict {
+		writeErr(w, http.StatusConflict, "resolve or abort the source rebase before creating a PR")
+		return
+	}
+
 	base := cr.SourceBranch
 	if base == "" {
 		base = projectDefaultBranch(p.Path, p.BaseBranch)

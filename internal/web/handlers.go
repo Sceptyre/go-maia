@@ -301,19 +301,20 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 // --- Worktrees (change requests) ---
 
 type worktreeInfo struct {
-	Slug         string `json:"slug"`
-	Path         string `json:"path,omitempty"`
-	Status       string `json:"status"`
-	Description  string `json:"description,omitempty"`
-	HasMaia      bool   `json:"has_maia"`
-	HasChange    bool   `json:"has_change"`
-	HasResearch  bool   `json:"has_research"`
-	HasPlan      bool   `json:"has_plan"`
-	Materialized bool   `json:"materialized"`
-	Branch       string `json:"branch"`
-	SourceBranch string `json:"source_branch,omitempty"`
-	Issue        int    `json:"issue,omitempty"`
-	PR           string `json:"pr,omitempty"`
+	Slug           string `json:"slug"`
+	Path           string `json:"path,omitempty"`
+	Status         string `json:"status"`
+	Description    string `json:"description,omitempty"`
+	HasMaia        bool   `json:"has_maia"`
+	HasChange      bool   `json:"has_change"`
+	HasResearch    bool   `json:"has_research"`
+	HasPlan        bool   `json:"has_plan"`
+	Materialized   bool   `json:"materialized"`
+	RebaseConflict bool   `json:"rebase_conflict"`
+	Branch         string `json:"branch"`
+	SourceBranch   string `json:"source_branch,omitempty"`
+	Issue          int    `json:"issue,omitempty"`
+	PR             string `json:"pr,omitempty"`
 }
 
 func changeRequestInfo(repoRoot string, cr state.ChangeRequest) worktreeInfo {
@@ -321,7 +322,7 @@ func changeRequestInfo(repoRoot string, cr state.ChangeRequest) worktreeInfo {
 		Slug: cr.Slug, Status: cr.Status, Description: cr.Description,
 		HasChange: cr.Change != "", HasResearch: cr.Artifacts["research"] != "",
 		HasPlan: cr.Artifacts["plan"] != "", Branch: cr.Branch,
-		SourceBranch: cr.SourceBranch, Issue: cr.Issue, PR: cr.PR,
+		RebaseConflict: cr.RebaseConflict, SourceBranch: cr.SourceBranch, Issue: cr.Issue, PR: cr.PR,
 	}
 	if cr.Worktree != nil {
 		info.Path = cr.Worktree.Path
@@ -488,6 +489,8 @@ type runRequest struct {
 	Message     string `json:"message,omitempty"`
 	Description string `json:"description,omitempty"`
 	Base        string `json:"base,omitempty"`
+	Continue    bool   `json:"continue,omitempty"`
+	Abort       bool   `json:"abort,omitempty"`
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -525,6 +528,19 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			if base := frontmatterField(string(data), "source_branch"); base != "" {
 				argv = append(argv, "--base", base)
 			}
+		}
+	case "update-base":
+		if !slugRe.MatchString(req.Slug) || req.Continue && req.Abort {
+			writeErr(w, http.StatusBadRequest, "valid slug and only one of continue or abort are allowed")
+			return
+		}
+		slug, command = req.Slug, "update-base"
+		argv = []string{"update-base", req.Slug}
+		if req.Continue {
+			argv = append(argv, "--continue")
+		}
+		if req.Abort {
+			argv = append(argv, "--abort")
 		}
 
 	case "steer":
@@ -604,6 +620,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if change == nil {
 			writeErr(w, http.StatusNotFound, "change request not found")
+			return
+		}
+		if change.RebaseConflict && req.Cmd != "update-base" {
+			writeErr(w, http.StatusConflict, "resolve or abort the source rebase before running another command")
 			return
 		}
 		if change.Worktree == nil && req.Cmd != "merge" {

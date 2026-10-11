@@ -102,6 +102,7 @@ function crCard(c, pid) {
       h('span', { class: 'spacer' }),
       c.issue ? h('span', { class: 'chip chip-issue' }, `#${c.issue}`) : null,
       !c.materialized ? h('span', { class: 'chip muted-chip' }, 'no worktree') : null,
+      c.rebase_conflict ? h('span', { class: 'chip warn' }, 'rebase conflict') : null,
       c.source_branch ? h('span', { class: 'chip' }, `from ${c.source_branch}`) : null,
       c.pr ? h('span', { class: 'chip chip-pr' }, 'PR ↗') : null,
       h('span', { class: 'chev' }, '›')),
@@ -179,7 +180,8 @@ async function renderCR(root, ctx, pid, slug, tab) {
       h('a', { href: `#/p/${pid}`, class: 'back' }, '← ' + (ctx.projectName || 'project')),
       cr ? h('h1', {}, cr.description || cr.slug) : h('h1', {}, 'Creating…'),
       cr ? h('span', { class: 'mono tiny muted' }, cr.slug) : null,
-      cr && cr.source_branch ? h('span', { class: 'chip' }, `from ${cr.source_branch}`) : null),
+      cr && cr.source_branch ? h('span', { class: 'chip' }, `from ${cr.source_branch}`) : null,
+      cr && cr.rebase_conflict ? h('span', { class: 'chip warn' }, 'rebase conflict') : null),
     h('div', { class: 'head-actions' },
       cr ? statusBadge(cr.status) : spinner(),
       cr && !cr.materialized ? h('button', {
@@ -385,6 +387,11 @@ function renderRun(root, ctx, pid, cr) {
   else if (others.length) root.appendChild(h('div', { class: 'notice notice-dim' },
     `${others.length} command${others.length === 1 ? '' : 's'} running for other change requests; you can keep working here.`));
 
+	if (cr.rebase_conflict) {
+		root.appendChild(h('div', { class: 'notice warn' },
+			'Rebase conflict: resolve files in this CR worktree, then Continue rebase or Abort rebase.'));
+	}
+
   if (!cr.materialized) {
     root.appendChild(emptyState('No worktree materialized', 'Materialize this change request before running maia commands.'));
     if (running && running.kind === 'materialize') {
@@ -397,7 +404,7 @@ function renderRun(root, ctx, pid, cr) {
   // action button: mkBody returns the request body, or null to abort.
   const action = (label, mkBody, opts = {}) => h('button', {
     class: 'btn' + (opts.primary ? ' btn-primary' : '') + (opts.danger ? ' btn-danger' : ''),
-    disabled: !!running,
+    disabled: !!running || (!!cr.rebase_conflict && !opts.allowDuringConflict),
     onclick: async () => {
       if (opts.confirmMsg && !(await confirmModal(opts.confirmMsg, { okLabel: label }))) return;
       const body = mkBody();
@@ -444,18 +451,29 @@ function renderRun(root, ctx, pid, cr) {
         phase: phaseNum.value ? Number(phaseNum.value) : 0,
       })))));
 
+  const updateBaseAction = cr.rebase_conflict
+    ? action('Continue rebase', () => ({ cmd: 'update-base', continue: true }), { primary: true, allowDuringConflict: true })
+    : action('Update from source', () => ({ cmd: 'update-base' }));
+  const abortRebaseAction = cr.rebase_conflict
+    ? action('Abort rebase', () => ({ cmd: 'update-base', abort: true }), { danger: true, allowDuringConflict: true })
+    : null;
+
+
   // Phase 4: commit / merge / cleanup / draft PR
   const commitMsg = h('input', { class: 'input grow', placeholder: 'commit message' });
   groups.appendChild(h('div', { class: 'run-group' },
     h('div', { class: 'run-group-title' }, '4 · Ship'),
     h('div', { class: 'steer-row' },
       commitMsg,
+
       action('Commit', () => {
         const m = commitMsg.value.trim();
         if (!m) { toast('Commit message is required', 'err'); return null; }
         return { cmd: 'commit', message: m };
       })),
     h('div', { class: 'btn-row' },
+      updateBaseAction,
+      abortRebaseAction,
       action('Merge', () => ({ cmd: 'merge' }), {
         danger: true,
         confirmMsg: 'Merge this change request into the base branch?',
