@@ -106,7 +106,7 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	for _, cr := range changes {
 		if cr.Issue > 0 {
 			imported[cr.Issue] = cr.Slug
-			info := changeRequestInfo(p.Path, cr)
+			info := changeRequestInfo(p, cr)
 			statuses[cr.Slug] = info.Status
 			materialized[cr.Slug] = info.Materialized
 		}
@@ -259,8 +259,8 @@ func (s *Server) ensureIssueChangeRequest(p *Project, is *github.Issue) (string,
 	contents := issueChangeMD(is, slug, base)
 	if err := state.SaveChangeRequest(state.ChangeRequest{
 		ProjectPath: p.Path, Slug: slug, Branch: "maia/" + slug,
-		Description: is.Title, SourceBranch: base, Status: "new", Issue: is.Number,
-		Change: contents,
+		Description: is.Title, SourceBranch: base, DefaultBase: isProjectDefaultBranch(p.Path, p.BaseBranch, base),
+		Status: "new", Issue: is.Number, Change: contents,
 	}); err != nil {
 		return "", false, err
 	}

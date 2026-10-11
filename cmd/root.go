@@ -41,7 +41,11 @@ Workflow (from parent branch — never leave it):
   maia new "description"       # Create CR + materialize worktree
   maia list                    # Show all CRs and materialized worktrees
   maia materialize <slug>      # Restore a cleaned-up CR worktree
-  maia update-base <slug>      # Rebase its worktree onto the latest source branch
+  maia update-base <slug>      # Rebase a CR onto its latest source branch
+  maia update-base <slug> --continue  # Continue after resolving conflicts
+  maia update-base <slug> --abort     # Abort a conflicted rebase
+  maia resolve-conflicts <slug> # Ask the configured model to propose conflict resolutions
+
   maia edit <slug>             # Edit change.md ($EDITOR or pipe)
   maia show change <slug>      # View change request
   maia diff <slug>             # View uncommitted changes

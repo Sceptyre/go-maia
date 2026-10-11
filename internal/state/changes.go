@@ -26,6 +26,7 @@ type ChangeRequest struct {
 	Branch         string            `json:"branch"`
 	Description    string            `json:"description"`
 	SourceBranch   string            `json:"source_branch,omitempty"`
+	DefaultBase    bool              `json:"default_base,omitempty"`
 	Status         string            `json:"status"`
 	Issue          int               `json:"issue,omitempty"`
 	PR             string            `json:"pr,omitempty"`
@@ -35,6 +36,26 @@ type ChangeRequest struct {
 	Worktree       *ChangeWorktree   `json:"worktree,omitempty"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+func DefaultSourceBranch(repo string) string {
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	for _, branch := range []string{"main", "master"} {
+		if err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
+			return branch
+		}
+	}
+	if out, err := exec.Command("git", "-C", repo, "branch", "--show-current").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return ""
+}
+
+func IsDefaultSourceBranch(repo, branch string) bool {
+	defaultBranch := strings.TrimPrefix(DefaultSourceBranch(repo), "origin/")
+	return defaultBranch != "" && strings.TrimPrefix(strings.TrimSpace(branch), "origin/") == defaultBranch
 }
 
 type changeFile struct {
@@ -187,6 +208,7 @@ func UpdateChangeDocument(projectPath, slug, contents string) error {
 		}
 		if value := frontmatterField(contents, "source_branch"); value != "" {
 			cr.SourceBranch = value
+			cr.DefaultBase = IsDefaultSourceBranch(projectPath, value)
 		}
 		if value := frontmatterField(contents, "status"); value != "" {
 			cr.Status = value
@@ -208,6 +230,13 @@ func UpdateChangePR(projectPath, slug, url string) error {
 	return updateChangeRequest(projectPath, slug, func(cr *ChangeRequest) error {
 		cr.PR = url
 		cr.Change = setFrontmatterFieldContent(cr.Change, "pr", url)
+		return nil
+	})
+}
+
+func UpdateChangeDefaultBase(projectPath, slug string, isDefault bool) error {
+	return updateChangeRequest(projectPath, slug, func(cr *ChangeRequest) error {
+		cr.DefaultBase = isDefault
 		return nil
 	})
 }
@@ -349,6 +378,9 @@ func SyncChangeRequests(projectPath string) ([]ChangeRequest, error) {
 		}
 		if value := frontmatterField(cr.Change, "source_branch"); value != "" {
 			cr.SourceBranch = value
+			if IsDefaultSourceBranch(projectPath, value) {
+				cr.DefaultBase = true
+			}
 		}
 		if value := frontmatterField(cr.Change, "status"); value != "" {
 			cr.Status = value

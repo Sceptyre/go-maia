@@ -94,7 +94,8 @@ source_branch: %s
 		}
 		if err := state.SaveChangeRequest(state.ChangeRequest{
 			ProjectPath: repoRoot, Slug: slug, Description: description,
-			SourceBranch: sourceBranch, Status: "new", Change: changeMD,
+			SourceBranch: sourceBranch, DefaultBase: state.IsDefaultSourceBranch(repoRoot, sourceBranch),
+			Status: "new", Change: changeMD,
 			Worktree: &state.ChangeWorktree{Path: worktreePath, Branch: branch},
 		}); err != nil {
 			_ = git.Remove(worktreePath)

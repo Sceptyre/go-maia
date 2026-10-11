@@ -107,6 +107,10 @@ func (s *Server) handlePutDoc(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := state.UpdateChangeDefaultBase(p.Path, slug, isProjectDefaultBranch(p.Path, p.BaseBranch, frontmatterField(body.Raw, "source_branch"))); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

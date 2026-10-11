@@ -95,7 +95,7 @@ var updateBaseCmd = &cobra.Command{
 		if err := state.UpdateChangeRebaseConflict(repoRoot, cr.Slug, false); err != nil {
 			return err
 		}
-		fmt.Printf("✓ %s is based on the latest %s\n", cr.Slug, cr.SourceBranch)
+		fmt.Printf("✓ %s is based on the latest %s\n", cr.Slug, baseRef)
 		return nil
 	},
 }

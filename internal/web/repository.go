@@ -21,10 +21,20 @@ func projectDefaultBranch(repo, configured string) string {
 			return branch
 		}
 	}
+	for _, branch := range []string{"main", "master"} {
+		if _, err := runGitIn(repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			return branch
+		}
+	}
 	if out, err := runGitIn(repo, "branch", "--show-current"); err == nil {
 		return strings.TrimSpace(string(out))
 	}
 	return ""
+}
+
+func isProjectDefaultBranch(repo, configured, branch string) bool {
+	defaultBranch := strings.TrimPrefix(projectDefaultBranch(repo, configured), "origin/")
+	return defaultBranch != "" && strings.TrimPrefix(strings.TrimSpace(branch), "origin/") == defaultBranch
 }
 
 func listProjectBranches(repo, configured string) ([]string, string, error) {

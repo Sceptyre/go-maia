@@ -71,6 +71,9 @@ This is a destructive operation — commit all changes before merging.`,
 		if change != nil && change.RebaseConflict {
 			return fmt.Errorf("resolve or abort the update-base rebase before merging %s", change.Slug)
 		}
+		if change != nil && change.DefaultBase {
+			return fmt.Errorf("change requests targeting the default branch must be merged through a pull request")
+		}
 		branch := ""
 		if change != nil {
 			branch = change.Branch
@@ -120,6 +123,9 @@ This is a destructive operation — commit all changes before merging.`,
 			} else {
 				checkout = []string{"git", "-C", mainDir, "checkout", sourceBranch}
 			}
+		}
+		if defaultBranch := repositoryDefaultBranch(mainDir); defaultBranch != "" && strings.TrimPrefix(sourceBranch, "origin/") == defaultBranch {
+			return fmt.Errorf("change requests targeting the default branch must be merged through a pull request; use the Web UI Draft PR action and merge it on GitHub")
 		}
 
 		description := "change"
@@ -179,6 +185,18 @@ func worktreeForBranch(repo, branch string) string {
 			path = strings.TrimPrefix(line, "worktree ")
 		} else if strings.HasPrefix(line, "branch refs/heads/") && strings.TrimPrefix(line, "branch refs/heads/") == branch {
 			return path
+		}
+	}
+	return ""
+}
+
+func repositoryDefaultBranch(repo string) string {
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		return strings.TrimPrefix(strings.TrimSpace(string(out)), "origin/")
+	}
+	for _, branch := range []string{"main", "master"} {
+		if err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
+			return branch
 		}
 	}
 	return ""

@@ -451,9 +451,17 @@ function renderRun(root, ctx, pid, cr) {
         phase: phaseNum.value ? Number(phaseNum.value) : 0,
       })))));
 
+  const resolveConflictsAction = cr.rebase_conflict
+    ? action('Ask maia to resolve', () => ({ cmd: 'resolve-conflicts' }), {
+      allowDuringConflict: true,
+      confirmMsg: 'Send the conflicted files to your configured model for a proposed resolution?',
+    })
+    : null;
   const updateBaseAction = cr.rebase_conflict
     ? action('Continue rebase', () => ({ cmd: 'update-base', continue: true }), { primary: true, allowDuringConflict: true })
-    : action('Update from source', () => ({ cmd: 'update-base' }));
+    : action('Update from source', () => ({ cmd: 'update-base' }), {
+      confirmMsg: `Fetch ${cr.source_branch} and rebase this CR worktree onto its latest commit?`,
+    });
   const abortRebaseAction = cr.rebase_conflict
     ? action('Abort rebase', () => ({ cmd: 'update-base', abort: true }), { danger: true, allowDuringConflict: true })
     : null;
@@ -472,12 +480,15 @@ function renderRun(root, ctx, pid, cr) {
         return { cmd: 'commit', message: m };
       })),
     h('div', { class: 'btn-row' },
+      resolveConflictsAction,
       updateBaseAction,
       abortRebaseAction,
-      action('Merge', () => ({ cmd: 'merge' }), {
-        danger: true,
-        confirmMsg: 'Merge this change request into the base branch?',
-      }),
+      cr.default_base
+        ? h('span', { class: 'muted tiny' }, 'Default-branch changes merge through a PR')
+        : action('Merge', () => ({ cmd: 'merge' }), {
+          danger: true,
+          confirmMsg: 'Merge this change request into its source branch?',
+        }),
       action('Cleanup', () => ({ cmd: 'cleanup' }), {
         danger: true,
         confirmMsg: 'Detach this worktree? The change request and branch will be kept and can be materialized again.'

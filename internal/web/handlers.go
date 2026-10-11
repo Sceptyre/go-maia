@@ -311,18 +311,21 @@ type worktreeInfo struct {
 	HasPlan        bool   `json:"has_plan"`
 	Materialized   bool   `json:"materialized"`
 	RebaseConflict bool   `json:"rebase_conflict"`
+	DefaultBase    bool   `json:"default_base"`
 	Branch         string `json:"branch"`
 	SourceBranch   string `json:"source_branch,omitempty"`
 	Issue          int    `json:"issue,omitempty"`
 	PR             string `json:"pr,omitempty"`
 }
 
-func changeRequestInfo(repoRoot string, cr state.ChangeRequest) worktreeInfo {
+func changeRequestInfo(project *Project, cr state.ChangeRequest) worktreeInfo {
 	info := worktreeInfo{
 		Slug: cr.Slug, Status: cr.Status, Description: cr.Description,
 		HasChange: cr.Change != "", HasResearch: cr.Artifacts["research"] != "",
 		HasPlan: cr.Artifacts["plan"] != "", Branch: cr.Branch,
-		RebaseConflict: cr.RebaseConflict, SourceBranch: cr.SourceBranch, Issue: cr.Issue, PR: cr.PR,
+		RebaseConflict: cr.RebaseConflict,
+		DefaultBase:    isProjectDefaultBranch(project.Path, project.BaseBranch, cr.SourceBranch),
+		SourceBranch:   cr.SourceBranch, Issue: cr.Issue, PR: cr.PR,
 	}
 	if cr.Worktree != nil {
 		info.Path = cr.Worktree.Path
@@ -338,22 +341,6 @@ func changeRequestInfo(repoRoot string, cr state.ChangeRequest) worktreeInfo {
 	return info
 }
 
-func readWorktreeInfo(repoRoot, slug string) (worktreeInfo, error) {
-	if !slugRe.MatchString(slug) {
-		return worktreeInfo{}, fmt.Errorf("invalid slug: %q", slug)
-	}
-	changes, err := state.SyncChangeRequests(repoRoot)
-	if err != nil {
-		return worktreeInfo{}, err
-	}
-	for _, cr := range changes {
-		if cr.Slug == slug {
-			return changeRequestInfo(repoRoot, cr), nil
-		}
-	}
-	return worktreeInfo{}, fmt.Errorf("change request not found: %s", slug)
-}
-
 func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.projectFrom(w, r)
 	if !ok {
@@ -367,7 +354,7 @@ func (s *Server) handleListWorktrees(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]worktreeInfo, 0, len(changes))
 	for _, cr := range changes {
-		out = append(out, changeRequestInfo(p.Path, cr))
+		out = append(out, changeRequestInfo(p, cr))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -415,13 +402,14 @@ func (s *Server) handleCreateChangeRequest(w http.ResponseWriter, r *http.Reques
 	change := fmt.Sprintf("---\nname: %s\ndescription: %s\nstatus: new\nsource_branch: %s\n---\n\n", slug, description, base)
 	cr := state.ChangeRequest{
 		ProjectPath: p.Path, Slug: slug, Branch: branch,
-		Description: description, SourceBranch: base, Status: "new", Change: change,
+		Description: description, SourceBranch: base, DefaultBase: isProjectDefaultBranch(p.Path, p.BaseBranch, base),
+		Status: "new", Change: change,
 	}
 	if err := state.SaveChangeRequest(cr); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, changeRequestInfo(p.Path, cr))
+	writeJSON(w, http.StatusCreated, changeRequestInfo(p, cr))
 }
 
 func (s *Server) handleMaterializeChangeRequest(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +539,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		slug, command = req.Slug, "steer"
 		argv = []string{"steer", req.Feedback, req.Slug}
 
+	case "resolve-conflicts":
+		if !slugRe.MatchString(req.Slug) {
+			writeErr(w, http.StatusBadRequest, "invalid or missing slug")
+			return
+		}
+		slug, command = req.Slug, "resolve-conflicts"
+		argv = []string{"resolve-conflicts", req.Slug}
+
 	case "apply":
 		if !slugRe.MatchString(req.Slug) {
 			writeErr(w, http.StatusBadRequest, "invalid or missing slug")
@@ -622,8 +618,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "change request not found")
 			return
 		}
-		if change.RebaseConflict && req.Cmd != "update-base" {
+		if change.RebaseConflict && req.Cmd != "update-base" && req.Cmd != "resolve-conflicts" {
 			writeErr(w, http.StatusConflict, "resolve or abort the source rebase before running another command")
+			return
+		}
+		if req.Cmd == "merge" && isProjectDefaultBranch(p.Path, p.BaseBranch, change.SourceBranch) {
+			writeErr(w, http.StatusConflict, "change requests targeting the default branch must merge through a pull request")
 			return
 		}
 		if change.Worktree == nil && req.Cmd != "merge" {
