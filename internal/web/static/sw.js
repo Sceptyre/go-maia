@@ -1,7 +1,7 @@
 // maia service worker — shell cache with network-first updates.
 // API responses are never cached (they carry live job/token state).
 
-const VERSION = 'maia-shell-v4';
+const VERSION = 'maia-shell-v5';
 const SHELL = [
   '/',
   '/index.html',

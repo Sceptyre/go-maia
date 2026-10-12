@@ -8,8 +8,8 @@ import {
 import { consoleEl, startJob, latestJobFor } from '../jobs.js';
 
 export async function render(root, ctx) {
-  const [, , pid, , slug, tab] = ctx.parts;
-  if (slug) return renderCR(root, ctx, pid, slug, tab || 'docs');
+  const [, , pid, , slug] = ctx.parts;
+  if (slug) return renderCR(root, ctx, pid, slug);
   return renderList(root, ctx, pid);
 }
 
@@ -51,7 +51,7 @@ async function renderList(root, ctx, pid) {
       h('span', { class: 'spacer' }),
       h('a', {
         class: 'btn btn-tiny',
-        href: running.slug ? `#/p/${pid}/cr/${running.slug}/run` : `#/p/${pid}/issues`,
+        href: running.slug ? `#/p/${pid}/cr/${running.slug}` : `#/p/${pid}/issues`,
       }, 'open console')));
   }
 
@@ -129,11 +129,11 @@ async function newCRModal(ctx, pid) {
         await post(`/api/projects/${pid}/worktrees/${cr.slug}/materialize`);
         toast('Creating change request worktree…', 'ok');
         await ctx.refreshState();
-        location.hash = `#/p/${pid}/cr/${cr.slug}/run`;
+        location.hash = `#/p/${pid}/cr/${cr.slug}`;
       } catch (e) {
         await ctx.refreshState();
         toast(e.code === 409 ? 'Change request saved; materialize it when a worktree slot is free.' : e.message, e.code === 409 ? 'info' : 'err', 6000);
-        location.hash = `#/p/${pid}/cr/${cr.slug}/docs`;
+        location.hash = `#/p/${pid}/cr/${cr.slug}`;
       }
     } catch (e) { err.textContent = e.message; }
   };
@@ -154,7 +154,7 @@ async function newCRModal(ctx, pid) {
 
 // --- CR detail ---
 
-async function renderCR(root, ctx, pid, slug, tab) {
+async function renderCR(root, ctx, pid, slug) {
   clear(root);
   let crs;
   try {
@@ -191,7 +191,7 @@ async function renderCR(root, ctx, pid, slug, tab) {
             await post(`/api/projects/${pid}/worktrees/${slug}/materialize`);
             toast('Materializing change request…', 'ok');
             await ctx.refreshState();
-            location.hash = `#/p/${pid}/cr/${slug}/run`;
+            ctx.refresh();
           } catch (e) { toast(e.message, 'err'); }
         },
       }, running ? 'Materializing…' : 'Materialize worktree') : null,
@@ -215,6 +215,11 @@ async function renderCR(root, ctx, pid, slug, tab) {
     }, `issue #${cr.issue}`));
   }
 
+  if (cr && cr.pr) {
+    head.querySelector('.crumbs').appendChild(
+      h('a', { class: 'chip chip-pr', href: cr.pr, target: '_blank', rel: 'noopener' }, 'draft PR ↗'));
+  }
+
   root.appendChild(head);
 
   if (creating) {
@@ -227,46 +232,23 @@ async function renderCR(root, ctx, pid, slug, tab) {
     return;
   }
 
-  // tab bar
-  const bar = h('div', { class: 'tabs' });
-  for (const t of ['docs', 'diff', 'run']) {
-    bar.appendChild(h('button', {
-      class: 'tab' + (tab === t ? ' on' : ''),
-      onclick: () => { location.hash = `#/p/${pid}/cr/${slug}/${t}`; },
-    }, t[0].toUpperCase() + t.slice(1)));
-  }
-  root.appendChild(bar);
-
-  const body = h('div', { class: 'tab-body' });
-  root.appendChild(body);
-
-  if (tab === 'docs') renderDocs(body, pid, cr);
-  else if (tab === 'diff') renderDiff(body, pid, cr);
-  else renderRun(body, ctx, pid, cr);
+  renderFlow(root, ctx, pid, cr);
 }
 
-// --- docs ---
+// --- flow artifacts (document panel shown beside its action) ---
 
-async function renderDocs(root, pid, cr) {
-  let doc = 'change';
-  const sub = h('div', { class: 'subtabs' });
-  const body = h('div', { class: 'doc-area' });
-  root.append(sub, body);
+function panelShell(title, refresh) {
+  const body = h('div', { class: 'panel-body' });
+  const head = h('div', { class: 'panel-head' },
+    h('span', { class: 'panel-title' }, title),
+    h('span', { class: 'spacer' }),
+    refresh ? h('button', { class: 'btn btn-tiny', onclick: refresh }, '↻ refresh') : null);
+  return { el: h('div', { class: 'panel' }, head, body), body };
+}
 
-  const drawSub = () => {
-    clear(sub);
-    for (const d of ['change', 'research', 'plan']) {
-      sub.appendChild(h('button', {
-        class: 'subtab' + (doc === d ? ' on' : ''),
-        onclick: () => { doc = d; drawSub(); draw(); },
-      }, d + '.md'));
-    }
-    if (cr && cr.pr) {
-      sub.appendChild(h('span', { class: 'spacer' }));
-      sub.appendChild(h('a', { class: 'chip chip-pr', href: cr.pr, target: '_blank', rel: 'noopener' }, 'draft PR ↗'));
-    }
-  };
-
+// docPanel renders change.md (editable) or a generated doc (research/plan).
+function docPanel(pid, cr, doc, hint) {
+  const { el, body } = panelShell(doc + '.md', () => draw());
   const draw = async () => {
     clear(body);
     body.appendChild(h('div', { class: 'loading' }, spinner()));
@@ -275,9 +257,7 @@ async function renderDocs(root, pid, cr) {
       d = await get(`/api/projects/${pid}/worktrees/${cr.slug}/doc/${doc}`);
     } catch (e) {
       clear(body);
-      body.appendChild(emptyState(
-        `${doc}.md not found`,
-        doc === 'change' ? '' : 'Generated docs appear after the corresponding maia phase runs (Init/Plan).'));
+      body.appendChild(h('div', { class: 'panel-hint' }, hint));
       return;
     }
     clear(body);
@@ -288,9 +268,8 @@ async function renderDocs(root, pid, cr) {
       body.appendChild(view);
     }
   };
-
-  drawSub();
   draw();
+  return el;
 }
 
 function drawEditor(root, pid, cr, raw) {
@@ -320,23 +299,15 @@ function drawEditor(root, pid, cr, raw) {
     ta);
 }
 
-// --- diff ---
-
-async function renderDiff(root, pid, cr) {
-  clear(root);
-  if (!cr.materialized) {
-    root.appendChild(emptyState('No worktree materialized', 'Materialize this change request to view its diff.'));
-    return;
-  }
-  const bar = h('div', { class: 'editor-bar' },
-    h('span', { class: 'muted' }, 'git status'),
-    h('span', { class: 'spacer' }),
-    h('button', { class: 'btn btn-tiny', onclick: () => draw() }, '↻ refresh'));
-  const body = h('div', {});
-  root.append(bar, body);
-
+// diffPanel shows worktree changes (staged/unstaged/untracked) in the flow.
+function diffPanel(pid, cr) {
+  const { el, body } = panelShell('git status', () => draw());
   const draw = async () => {
     clear(body);
+    if (!cr.materialized) {
+      body.appendChild(h('div', { class: 'panel-hint' }, 'No worktree materialized — materialize to see changes.'));
+      return;
+    }
     body.appendChild(h('div', { class: 'loading' }, spinner()));
     let d;
     try {
@@ -348,7 +319,7 @@ async function renderDiff(root, pid, cr) {
     }
     clear(body);
     if (!d.unstaged && !d.staged && !d.untracked.length) {
-      body.appendChild(emptyState('Working tree clean', 'No uncommitted changes in this worktree.'));
+      body.appendChild(h('div', { class: 'panel-hint' }, 'Working tree clean — no uncommitted changes.'));
       return;
     }
     if (d.untracked.length) {
@@ -359,6 +330,7 @@ async function renderDiff(root, pid, cr) {
     if (d.unstaged) body.appendChild(diffBlock('Unstaged changes', d.unstaged));
   };
   draw();
+  return el;
 }
 
 function diffBlock(title, text) {
@@ -375,9 +347,9 @@ function diffBlock(title, text) {
   return h('div', {}, h('div', { class: 'diff-file' }, title), pre);
 }
 
-// --- run ---
+// --- flow (one view: each action beside the artifact it produces) ---
 
-function renderRun(root, ctx, pid, cr) {
+function renderFlow(root, ctx, pid, cr) {
   const cons = consoleEl();
   const runningJobs = ctx.state.running_jobs || (ctx.state.running_job ? [ctx.state.running_job] : []);
   const running = runningJobs.find((job) => job.project_id === pid && job.slug === cr.slug);
@@ -387,24 +359,20 @@ function renderRun(root, ctx, pid, cr) {
   else if (others.length) root.appendChild(h('div', { class: 'notice notice-dim' },
     `${others.length} command${others.length === 1 ? '' : 's'} running for other change requests; you can keep working here.`));
 
-	if (cr.rebase_conflict) {
-		root.appendChild(h('div', { class: 'notice warn' },
-			'Rebase conflict: resolve files in this CR worktree, then Continue rebase or Abort rebase.'));
-	}
+  if (cr.rebase_conflict) {
+    root.appendChild(h('div', { class: 'notice warn' },
+      'Rebase conflict: resolve files in this CR worktree, then Continue rebase or Abort rebase.'));
+  }
 
   if (!cr.materialized) {
-    root.appendChild(emptyState('No worktree materialized', 'Materialize this change request before running maia commands.'));
-    if (running && running.kind === 'materialize') {
-      root.appendChild(cons.el);
-      cons.mount(running.id, { onEnd: () => ctx.refresh() });
-    }
-    return;
+    root.appendChild(h('div', { class: 'notice notice-dim' },
+      'No worktree materialized — materialize this change request (header button) to run maia commands.'));
   }
 
   // action button: mkBody returns the request body, or null to abort.
   const action = (label, mkBody, opts = {}) => h('button', {
     class: 'btn' + (opts.primary ? ' btn-primary' : '') + (opts.danger ? ' btn-danger' : ''),
-    disabled: !!running || (!!cr.rebase_conflict && !opts.allowDuringConflict),
+    disabled: !!running || !cr.materialized || (!!cr.rebase_conflict && !opts.allowDuringConflict),
     onclick: async () => {
       if (opts.confirmMsg && !(await confirmModal(opts.confirmMsg, { okLabel: label }))) return;
       const body = mkBody();
@@ -412,36 +380,48 @@ function renderRun(root, ctx, pid, cr) {
       try {
         const job = await startJob(pid, { slug: cr.slug, ...body });
         cons.mount(job.id, { onEnd: () => ctx.refresh() });
+        cons.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         window.dispatchEvent(new CustomEvent('maia:job-started'));
       } catch (e) { toast(e.message, 'err', 6000); }
     },
   }, label);
 
-  const groups = h('div', { class: 'run-groups' });
+  // group(title, controls, panel?) — controls left, artifact panel right.
+  const group = (title, controls, panel) => h('div', { class: 'run-group' + (panel ? ' run-group-pair' : '') },
+    h('div', { class: 'run-controls' },
+      h('div', { class: 'run-group-title' }, title), controls),
+    panel || null);
 
-  groups.append(
-    h('div', { class: 'run-group' },
-      h('div', { class: 'run-group-title' }, '1 · Understand'),
-      h('div', { class: 'btn-row' }, action('Init', () => ({ cmd: 'init' }), { primary: true }))),
+  const flow = h('div', { class: 'run-groups' });
 
-    h('div', { class: 'run-group' },
-      h('div', { class: 'run-group-title' }, '2 · Design'),
-      h('div', { class: 'btn-row' }, action('Plan', () => ({ cmd: 'plan' }), { primary: true }))));
+  // Goal: change.md — the input Init researches and Plan builds on.
+  flow.appendChild(group('Goal',
+    h('div', { class: 'muted tiny' },
+      'Your goal and requirements. Edit frontmatter (status, description) and content directly.'),
+    docPanel(pid, cr, 'change', 'No change.md yet — describe what you want to change.')));
 
-  // Phase 3: steer + apply
+  flow.appendChild(group('1 · Understand',
+    h('div', { class: 'btn-row' }, action('Init', () => ({ cmd: 'init' }), { primary: true })),
+    docPanel(pid, cr, 'research', 'research.md appears after Init runs.')));
+
+  // Design: Plan + Steer both edit plan.md, so they share its panel.
   const feedback = h('textarea', { class: 'input', rows: 2, placeholder: 'what to adjust…' });
+  flow.appendChild(group('2 · Design',
+    h('div', {},
+      h('div', { class: 'btn-row' }, action('Plan', () => ({ cmd: 'plan' }), { primary: true })),
+      h('div', { class: 'steer-row' },
+        feedback,
+        action('Steer', () => {
+          const f = feedback.value.trim();
+          if (!f) { toast('Feedback is required', 'err'); return null; }
+          return { cmd: 'steer', feedback: f };
+        }))),
+    docPanel(pid, cr, 'plan', 'plan.md appears after Plan runs — review it here, then Steer or Apply.')));
+
+  // Build: apply the plan, watch the working tree change.
   const dryRun = h('input', { type: 'checkbox' });
   const phaseNum = h('input', { class: 'input input-num', type: 'number', min: '1', placeholder: 'all' });
-  groups.appendChild(h('div', { class: 'run-group' },
-    h('div', { class: 'run-group-title' }, '3 · Build'),
-    h('div', { class: 'steer-row' },
-      feedback,
-      action('Steer', () => {
-        const f = feedback.value.trim();
-        if (!f) { toast('Feedback is required', 'err'); return null; }
-        return { cmd: 'steer', feedback: f };
-      }),
-    ),
+  flow.appendChild(group('3 · Build',
     h('div', { class: 'btn-row' },
       h('label', { class: 'inline-label' }, dryRun, ' dry run'),
       h('label', { class: 'inline-label' }, phaseNum, ' phase'),
@@ -449,7 +429,8 @@ function renderRun(root, ctx, pid, cr) {
         cmd: 'apply',
         dry_run: dryRun.checked,
         phase: phaseNum.value ? Number(phaseNum.value) : 0,
-      })))));
+      }))),
+    diffPanel(pid, cr)));
 
   const resolveConflictsAction = cr.rebase_conflict
     ? action('Ask maia to resolve', () => ({ cmd: 'resolve-conflicts' }), {
@@ -466,36 +447,34 @@ function renderRun(root, ctx, pid, cr) {
     ? action('Abort rebase', () => ({ cmd: 'update-base', abort: true }), { danger: true, allowDuringConflict: true })
     : null;
 
-
-  // Phase 4: commit / merge / cleanup / draft PR
+  // Ship: commit / merge / cleanup / draft PR.
   const commitMsg = h('input', { class: 'input grow', placeholder: 'commit message' });
-  groups.appendChild(h('div', { class: 'run-group' },
-    h('div', { class: 'run-group-title' }, '4 · Ship'),
-    h('div', { class: 'steer-row' },
-      commitMsg,
-
-      action('Commit', () => {
-        const m = commitMsg.value.trim();
-        if (!m) { toast('Commit message is required', 'err'); return null; }
-        return { cmd: 'commit', message: m };
-      })),
-    h('div', { class: 'btn-row' },
-      resolveConflictsAction,
-      updateBaseAction,
-      abortRebaseAction,
-      cr.default_base
-        ? h('span', { class: 'muted tiny' }, 'Default-branch changes merge through a PR')
-        : action('Merge', () => ({ cmd: 'merge' }), {
+  flow.appendChild(group('4 · Ship',
+    h('div', {},
+      h('div', { class: 'steer-row' },
+        commitMsg,
+        action('Commit', () => {
+          const m = commitMsg.value.trim();
+          if (!m) { toast('Commit message is required', 'err'); return null; }
+          return { cmd: 'commit', message: m };
+        })),
+      h('div', { class: 'btn-row' },
+        resolveConflictsAction,
+        updateBaseAction,
+        abortRebaseAction,
+        cr.default_base
+          ? h('span', { class: 'muted tiny' }, 'Default-branch changes merge through a PR')
+          : action('Merge', () => ({ cmd: 'merge' }), {
+            danger: true,
+            confirmMsg: 'Merge this change request into its source branch?',
+          }),
+        action('Cleanup', () => ({ cmd: 'cleanup' }), {
           danger: true,
-          confirmMsg: 'Merge this change request into its source branch?',
+          confirmMsg: 'Detach this worktree? The change request and branch will be kept and can be materialized again.'
         }),
-      action('Cleanup', () => ({ cmd: 'cleanup' }), {
-        danger: true,
-        confirmMsg: 'Detach this worktree? The change request and branch will be kept and can be materialized again.'
-      }),
-      prAction(ctx, pid, cr, running))));
+        prAction(ctx, pid, cr, running)))));
 
-  root.appendChild(groups);
+  root.appendChild(flow);
   root.appendChild(h('div', { class: 'console-wrap' }, cons.el));
 
   // Attach existing/latest job output (SSE replays finished jobs from 0).

@@ -316,22 +316,6 @@ main {
 .form { display: flex; flex-direction: column; gap: 8px; }
 .form-sep { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 8px; font-weight: 600; color: var(--muted); font-size: 13px; }
 
-/* --- tabs --- */
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; overflow-x: auto; }
-.tab {
-  background: none; border: none; border-bottom: 2px solid transparent;
-  color: var(--muted); font: inherit; font-weight: 600; font-size: 14px;
-  padding: 8px 14px; cursor: pointer;
-}
-.tab.on { color: var(--fg); border-bottom-color: var(--accent2); }
-.subtabs { display: flex; gap: 4px; align-items: center; margin-bottom: 8px; overflow-x: auto; }
-.subtab {
-  background: none; border: 1px solid transparent; border-radius: 7px;
-  color: var(--muted); font: inherit; font-family: var(--mono); font-size: 13px;
-  padding: 5px 10px; cursor: pointer;
-}
-.subtab.on { background: var(--bg3); color: var(--fg); border-color: var(--border); }
-
 /* --- notices / states --- */
 .notice {
   display: flex; align-items: center; gap: 8px;
@@ -354,7 +338,6 @@ main {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* --- editor / docs --- */
-.doc-area { min-height: 50vh; }
 .editor-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .editor {
   width: 100%; min-height: 55vh; resize: vertical;
@@ -383,12 +366,27 @@ main {
 .d-meta { color: var(--muted); }
 .untracked { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; color: #9be8b7; white-space: pre-wrap; }
 
-/* --- run tab --- */
+/* --- flow: action controls beside their artifact panel --- */
 .run-groups { display: grid; gap: 10px; }
 .run-group { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
 .run-group-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 6px; }
 .steer-row { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
 .steer-row .input:not(.input-num):not(.input-num2) { flex: 1; min-width: 180px; }
+
+.run-group-pair { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.run-controls { min-width: 0; }
+.panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-width: 0; }
+.panel-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg3); border-bottom: 1px solid var(--border); }
+.panel-title { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--muted); }
+.panel-body { max-height: min(60vh, 560px); overflow-y: auto; padding: 8px 12px; }
+.panel-hint { color: var(--muted); font-size: 13px; padding: 14px 4px; }
+.panel-body .markdown { background: none; border: none; padding: 0; }
+.panel-body .editor { min-height: 240px; }
+.panel-body .diff-file { margin-top: 4px; }
+
+@media (max-width: 860px) {
+  .run-group-pair { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* --- console --- */
 .console-wrap { margin-top: 12px; }

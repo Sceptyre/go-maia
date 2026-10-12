@@ -355,8 +355,10 @@ maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
 - **Worktree lifecycle** — Cleanup detaches a worktree but preserves `change.md`,
   generated docs, issue/PR links, branch, and status in the CR record. Use
   `maia materialize <slug>` (or the UI button) to restore it later.
-- **CR detail** — Docs (edit `change.md`, read rendered `research.md`/`plan.md`),
-  Diff (worktree changes), and Run (streaming job console over SSE)
+- **CR detail** — one continuous flow view: edit `change.md` under Goal, run
+  each phase and read its artifact beside the action (Init → `research.md`,
+  Plan/Steer → `plan.md`, Apply → worktree diff under git status), ship with
+  Commit/Merge/Cleanup, and watch the streaming job console (SSE) at the bottom
 - **Settings** — one master config (`~/.maia/web.json`) for the server, global
   defaults (worktree cap, detection labels, import mode, poll interval), and
   `~/.maia/config.json` (model, API keys) — editable from the admin dashboard

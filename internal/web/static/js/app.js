@@ -115,7 +115,7 @@ function drawBanner(st) {
   banner.append(spinner(), h('span', {}, `running ${jobs.length} command${jobs.length === 1 ? '' : 's'}:`));
   for (const job of jobs) {
     const href = job.project_id
-      ? job.slug ? `#/p/${job.project_id}/cr/${job.slug}/run` : `#/p/${job.project_id}/issues`
+      ? job.slug ? `#/p/${job.project_id}/cr/${job.slug}` : `#/p/${job.project_id}/issues`
       : '#/';
     banner.append(h('a', { class: 'btn btn-tiny', href }, `${job.command}${job.slug ? ` · ${job.slug}` : ''}`));
   }
