@@ -117,11 +117,13 @@ func (s *RegistryStore) saveLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
-// Get returns the registry for reading. Callers must not mutate the result.
+// Get returns a snapshot of the registry for reading. The copy is detached
+// from the store: callers may hold and iterate it while other goroutines
+// Update, and mutating it does not affect the store.
 func (s *RegistryStore) Get() *Registry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.reg
+	return s.reg.clone()
 }
 
 // Update applies fn under the lock and persists the registry.
@@ -138,6 +140,18 @@ func (s *RegistryStore) Update(fn func(*Registry) error) error {
 func projectID(path string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(path)))
 	return hex.EncodeToString(sum[:6])
+}
+
+// clone returns a detached copy that is safe to read while the store updates.
+func (r *Registry) clone() *Registry {
+	c := *r
+	c.Defaults.Github.Labels = append([]string(nil), r.Defaults.Github.Labels...)
+	c.Projects = make([]Project, len(r.Projects))
+	copy(c.Projects, r.Projects)
+	for i := range c.Projects {
+		c.Projects[i].Github.Labels = append([]string(nil), r.Projects[i].Github.Labels...)
+	}
+	return &c
 }
 
 // Find returns the project with the given id.

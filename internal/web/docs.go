@@ -146,7 +146,11 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	if porcelain := git("status", "--porcelain"); porcelain != "" {
 		for _, line := range strings.Split(strings.TrimRight(porcelain, "\n"), "\n") {
 			if strings.HasPrefix(line, "??") {
-				untracked = append(untracked, strings.TrimSpace(line[2:]))
+				name := strings.TrimSpace(line[2:])
+				if name == state.StateDir || strings.HasPrefix(name, state.StateDir+"/") {
+					continue // maia's own state is never part of the change
+				}
+				untracked = append(untracked, name)
 			}
 		}
 	}

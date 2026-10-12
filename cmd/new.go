@@ -69,6 +69,11 @@ var newCmd = &cobra.Command{
 		if err := git.Create(worktreePath, branch, baseBranch); err != nil {
 			return err
 		}
+		// Keep maia's own state dir out of status/diff/commits repo-wide
+		// (info/exclude is shared by every worktree, never committed).
+		if err := git.EnsureLocalExclude(worktreePath, state.StateDir); err != nil {
+			fmt.Printf("warning: could not exclude %s/ from git: %v\n", state.StateDir, err)
+		}
 
 		// Create .maia/.generated/ directory structure
 		maiaDir := filepath.Join(worktreePath, state.StateDir)

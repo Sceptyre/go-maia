@@ -61,6 +61,9 @@ var materializeCmd = &cobra.Command{
 		if out, err := gitCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("create worktree: %s", out)
 		}
+		if err := git.EnsureLocalExclude(path, state.StateDir); err != nil {
+			fmt.Printf("warning: could not exclude %s/ from git: %v\n", state.StateDir, err)
+		}
 
 		maiaDir := filepath.Join(path, state.StateDir)
 		if err := os.MkdirAll(filepath.Join(path, state.GetGeneratedDir()), 0755); err != nil {
