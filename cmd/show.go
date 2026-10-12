@@ -25,7 +25,7 @@ Examples:
   maia show research my-slug  # Display research for 'my-slug' worktree
   maia show change my-slug    # Display change.md for 'my-slug' worktree
   maia show change            # Display change.md in current worktree`,
-	Args: cobra.RangeArgs(1, 2),
+	Args:      cobra.RangeArgs(1, 2),
 	ValidArgs: []string{"plan", "research", "change"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		docType := args[0]
@@ -35,6 +35,40 @@ Examples:
 		}
 
 		// Resolve the base directory
+		if slug != "" {
+			repoRoot, err := state.RepositoryForWorktree(".")
+			if err == nil {
+				cr, found, readErr := state.GetChangeRequest(repoRoot, slug)
+				if readErr != nil {
+					return readErr
+				}
+				if found {
+					var content string
+					if cr.Worktree != nil {
+						path := filepath.Join(cr.Worktree.Path, state.StateDir, "change.md")
+						if docType == "research" || docType == "plan" {
+							path = filepath.Join(cr.Worktree.Path, state.GetGeneratedDir(), docType+".md")
+						}
+						if data, err := os.ReadFile(path); err == nil {
+							content = string(data)
+						}
+					}
+					if content == "" {
+						if docType == "change" {
+							content = cr.Change
+						} else {
+							content = cr.Artifacts[docType]
+						}
+					}
+					if content == "" {
+						return fmt.Errorf("%s not found for change request %s", docType, slug)
+					}
+					fmt.Print(render.RenderMarkdown(content))
+					return nil
+				}
+			}
+		}
+
 		var baseDir string
 
 		if slug != "" {

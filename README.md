@@ -49,6 +49,7 @@
 - [How It Works](#-how-it-works)
 - [Examples](#-examples)
 - [Commands](#-commands)
+- [Web UI](#-web-ui)
 - [Worktree Structure](#worktree-structure)
 - [Built With](#-built-with)
 - [Contributing](#-contributing)
@@ -131,6 +132,9 @@ Maia is configured via `~/.maia/config.json`:
 {
   "openai_api_key": "your-api-key",
   "openai_base_url": "https://api.openai.com/v1",
+  "openai_headers": {
+    "x-opencode-session": "{maia_session}"
+  },
   "model": "gpt-4",
   "brave_api_key": "your-brave-api-key"
 }
@@ -142,6 +146,7 @@ Maia is configured via `~/.maia/config.json`:
 |-----|------|---------|-------------|
 | `openai_api_key` | `string` | — | **Required.** API key for the LLM provider (OpenAI-compatible) |
 | `openai_base_url` | `string` | `https://api.openai.com/v1` | API base URL. Change this for Azure, Ollama, LM Studio, etc. |
+| `openai_headers` | `object` | `{}` | Extra HTTP headers for compatible providers. Values may use `{maia_session}`, a deterministic ID per project/change request (e.g. `x-opencode-session`). |
 | `model` | `string` | `gpt-4` | Model to use for all AI operations |
 | `brave_api_key` | `string` | — | Brave Search API key for enhanced web research. Falls back to DuckDuckGo if not set. |
 
@@ -287,16 +292,20 @@ maia merge
 
 | Command | Description |
 |---------|-------------|
-| `maia new "description"` | Create an isolated worktree with a `change.md` template |
-| `maia list` | List active worktrees for the current repository |
+| `maia new "description"` | Create a persistent change request and materialize its worktree |
+| `maia materialize <slug>` | Create or restore a CR's worktree from its saved source branch |
+| `maia update-base <slug>` | Rebase the CR onto the latest source branch; supports `--continue`/`--abort` |
+| `maia resolve-conflicts <slug>` | Ask the configured model to propose a patch for current rebase conflicts |
+| `maia list` | List all change requests and their worktree state for the current repository |
 | `maia init` | Research the codebase and web → `research.md` |
 | `maia plan` | Generate a phased implementation plan → `plan.md` |
-| `maia show <plan\|research>` | Display the contents of a generated document |
+| `maia show <plan\|research\|change> [slug]` | Display generated docs or a saved change request |
 | `maia steer "feedback"` | Revise the plan based on your feedback |
 | `maia apply` | Execute the implementation plan |
-| `maia merge` | Merge the worktree branch back to main |
-| `maia cleanup` | Remove a worktree |
+| `maia merge <slug>` | Merge the CR branch into its source branch, even after cleanup |
+| `maia cleanup <slug>` | Detach a worktree while retaining the CR and its saved docs |
 | `maia config` | Show current configuration and value sources |
+| `maia web` | Start the local web UI |
 
 <details>
 <summary>Command Options</summary>
@@ -321,6 +330,46 @@ maia new -b develop "description"      # Create from a specific branch
 ```
 
 </details>
+
+## 🌐 Web UI
+
+`maia web` runs a local server that manages **multiple projects** (git
+repositories). It auto-registers the repository you launch it from; add more
+from the dashboard by local path or clone a remote HTTPS/SSH Git URL into
+`~/.maia/projects/`. It's a progressive web app (installable, works offline for
+the cached shell) with a mobile-first layout.
+
+```bash
+maia web                # http://127.0.0.1:7878
+maia web --port 3000    # custom port
+maia web --addr 0.0.0.0 --token my-secret   # LAN access (token required)
+```
+
+- **Projects dashboard** — every supported repository with its path, open
+  change-request count, and last GitHub scan
+- **Change requests** — durable records in `~/.maia/changes.json`, independent
+  of their optional worktrees. Create from any local or origin branch; issue
+  imports use the configured/default origin branch and remain visible while
+  awaiting a worktree slot. `max_active_worktrees` limits materialized worktrees,
+  not the number of CR records.
+- **Worktree lifecycle** — Cleanup detaches a worktree but preserves `change.md`,
+  generated docs, issue/PR links, branch, and status in the CR record. Use
+  `maia materialize <slug>` (or the UI button) to restore it later.
+- **CR detail** — one continuous flow view: edit `change.md` under Goal, run
+  each phase and read its artifact beside the action (Init → `research.md`,
+  Plan/Steer → `plan.md`, Apply → worktree diff under git status), ship with
+  Commit/Merge/Cleanup, and watch the streaming job console (SSE) at the bottom
+- **Settings** — one master config (`~/.maia/web.json`) for the server, global
+  defaults (worktree cap, detection labels, import mode, poll interval), and
+  `~/.maia/config.json` (model, API keys) — editable from the admin dashboard
+- **Actions** — Init, Plan, Steer, Dry run, Apply, Commit, Merge, Cleanup, Draft
+  PR and Update from source; rebase conflicts stay in that CR's worktree. The configured model can propose a patch for conflicted files; maia stages only those files, and you review before continuing. Only one command per CR runs at a time, while different CRs can run concurrently.
+- **GitHub** — auth via the `gh` CLI, then `GH_TOKEN`/`GITHUB_TOKEN`, then the
+  Settings token; draft PRs are opened from the browser
+- **Security** — binds to `127.0.0.1` only by default. A non-loopback `--addr`
+  requires `--token`; the API rejects requests without it (`?token=...` or
+  `Authorization: Bearer`). Static assets are served unauthenticated so the
+  page can load; the app prompts for the token on the first API call.
 
 ## 📂 Worktree Structure
 

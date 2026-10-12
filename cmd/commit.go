@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
+	"github.com/sceptyre/maia/internal/git"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -29,14 +31,14 @@ Examples:
 			return err
 		}
 
-		// Stage all changes
+		// Stage all changes except maia's own state dir - it must never
+		// land in a commit or a pushed branch, even if the local exclude
+		// file is missing.
 		fmt.Printf("Staging changes in %s...\n", worktreePath)
 
-		gitAdd := exec.Command("git", "add", "-A")
-		gitAdd.Dir = worktreePath
-		if out, addErr := gitAdd.CombinedOutput(); addErr != nil {
-			fmt.Println(string(out))
-			return fmt.Errorf("git add failed: %w", addErr)
+		if addErr := stageWorktreeChanges(worktreePath); addErr != nil {
+			fmt.Println(addErr)
+			return addErr
 		}
 
 		// Check if there's anything to commit
@@ -62,6 +64,23 @@ Examples:
 		fmt.Println("\n✓ Changes committed")
 		return nil
 	},
+}
+
+// stageWorktreeChanges stages every change in the worktree except maia's
+// own state dir, which must never enter a commit or a pushed branch. The
+// local exclude is (re)written first so git add skips .maia even for
+// worktrees that predate it; if that fails we refuse to stage rather than
+// risk sweeping state files into the commit.
+func stageWorktreeChanges(worktree string) error {
+	if err := git.EnsureLocalExclude(worktree, state.StateDir); err != nil {
+		return fmt.Errorf("exclude %s/ from git: %w", state.StateDir, err)
+	}
+	gitAdd := exec.Command("git", "add", "-A")
+	gitAdd.Dir = worktree
+	if out, err := gitAdd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 func init() {

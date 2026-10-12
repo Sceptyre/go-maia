@@ -81,6 +81,7 @@ Examples:
 		fmt.Println(strings.Repeat("─", 60))
 
 		// Initialize LLM client
+		llm.UseSessionIDFor(worktreePath, "")
 		client := llm.NewClient()
 		if client.APIKey == "" {
 			return fmt.Errorf("API key not configured. Set in ~/.maia/config.json or export OPENAI_API_KEY")

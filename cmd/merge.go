@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sceptyre/maia/internal/git"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
 )
+
+var mergeBaseBranch string
 
 var mergeCmd = &cobra.Command{
 	Use:   "merge [slug]",
@@ -28,16 +29,27 @@ This is a destructive operation — commit all changes before merging.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var worktreePath string
-
+		var change *state.ChangeRequest
+		mainDir, err := state.RepositoryForWorktree(".")
+		if err != nil {
+			return err
+		}
 		if len(args) > 0 {
-			// Slug provided — resolve from parent repo
-			resolved, err := state.ValidateWorktreeExists(args[0])
-			if err != nil {
+			if found, ok, err := state.GetChangeRequest(mainDir, args[0]); err != nil {
 				return err
+			} else if ok {
+				change = found
+				if found.Worktree != nil {
+					worktreePath = found.Worktree.Path
+				}
+			} else {
+				resolved, err := state.ValidateWorktreeExists(args[0])
+				if err != nil {
+					return err
+				}
+				worktreePath = resolved
 			}
-			worktreePath = resolved
 		} else {
-			// No slug — assume CWD is the worktree (legacy behavior)
 			if !state.HasWorktree() {
 				return fmt.Errorf("not in a maia worktree. Provide a slug: maia merge <slug>")
 			}
@@ -46,20 +58,33 @@ This is a destructive operation — commit all changes before merging.`,
 				return err
 			}
 			worktreePath = cwd
+			root, err := state.RepositoryForWorktree(cwd)
+			if err != nil {
+				return err
+			}
+			mainDir = root
+			if found, ok, err := state.GetChangeRequest(root, filepath.Base(cwd)); err == nil && ok {
+				change = found
+			}
 		}
 
-		mainDir, err := git.GetMainDir()
-		if err != nil {
-			return err
+		if change != nil && change.RebaseConflict {
+			return fmt.Errorf("resolve or abort the update-base rebase before merging %s", change.Slug)
 		}
-
-		// Get current branch of the worktree using git -C
-		getBranch := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
-		out, err := getBranch.Output()
-		if err != nil {
-			return fmt.Errorf("failed to get branch for worktree: %w", err)
+		if change != nil && change.DefaultBase {
+			return fmt.Errorf("change requests targeting the default branch must be merged through a pull request")
 		}
-		branch := strings.TrimSpace(string(out))
+		branch := ""
+		if change != nil {
+			branch = change.Branch
+		}
+		if branch == "" && worktreePath != "" {
+			out, err := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+			if err != nil {
+				return fmt.Errorf("failed to get branch for worktree: %w", err)
+			}
+			branch = strings.TrimSpace(string(out))
+		}
 
 		// Get the current branch in main repo
 		getMainBranch := exec.Command("git", "-C", mainDir, "rev-parse", "--abbrev-ref", "HEAD")
@@ -68,28 +93,64 @@ This is a destructive operation — commit all changes before merging.`,
 			return fmt.Errorf("failed to get main branch: %w", err)
 		}
 		mainBranch := strings.TrimSpace(string(mainOut))
+		sourceBranch := mergeBaseBranch
+		if sourceBranch == "" && change != nil {
+			sourceBranch = change.SourceBranch
+		}
+		if sourceBranch == "" && worktreePath != "" {
+			if data, err := os.ReadFile(filepath.Join(worktreePath, state.StateDir, "change.md")); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					if strings.HasPrefix(line, "source_branch:") {
+						sourceBranch = strings.TrimSpace(strings.TrimPrefix(line, "source_branch:"))
+						break
+					}
+				}
+			}
+		}
+		mergeDir := mainDir
+		var checkout []string
+		if sourceBranch != "" {
+			mainBranch = strings.TrimPrefix(sourceBranch, "origin/")
+			if wt := worktreeForBranch(mainDir, mainBranch); wt != "" && filepath.Clean(wt) != filepath.Clean(worktreePath) {
+				mergeDir = wt
+			} else if strings.HasPrefix(sourceBranch, "origin/") {
+				localRef := exec.Command("git", "-C", mainDir, "show-ref", "--verify", "--quiet", "refs/heads/"+mainBranch)
+				if localRef.Run() != nil {
+					checkout = []string{"git", "-C", mainDir, "checkout", "--track", "-b", mainBranch, sourceBranch}
+				} else {
+					checkout = []string{"git", "-C", mainDir, "checkout", mainBranch}
+				}
+			} else {
+				checkout = []string{"git", "-C", mainDir, "checkout", sourceBranch}
+			}
+		}
+		if defaultBranch := repositoryDefaultBranch(mainDir); defaultBranch != "" && strings.TrimPrefix(sourceBranch, "origin/") == defaultBranch {
+			return fmt.Errorf("change requests targeting the default branch must be merged through a pull request; use the Web UI Draft PR action and merge it on GitHub")
+		}
 
-		// Get description from change.md in the worktree
 		description := "change"
-		changeMDPath := filepath.Join(worktreePath, state.StateDir, "change.md")
-		changeMD, err := os.ReadFile(changeMDPath)
-		if err == nil {
-			lines := strings.Split(string(changeMD), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "description:") {
-					description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-					break
+		if change != nil && change.Description != "" {
+			description = change.Description
+		} else if worktreePath != "" {
+			changeMDPath := filepath.Join(worktreePath, state.StateDir, "change.md")
+			if changeMD, err := os.ReadFile(changeMDPath); err == nil {
+				for _, line := range strings.Split(string(changeMD), "\n") {
+					if strings.HasPrefix(line, "description:") {
+						description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+						break
+					}
 				}
 			}
 		}
 
 		fmt.Printf("Merging branch: %s\n", branch)
-		fmt.Printf("Into: %s (%s)\n", mainBranch, mainDir)
+		fmt.Printf("Into: %s (%s)\n", mainBranch, mergeDir)
 
-		commands := [][]string{
-			{"git", "-C", mainDir, "checkout", mainBranch},
-			{"git", "-C", mainDir, "merge", branch, "--no-ff", "-m", fmt.Sprintf("maia: %s", description)},
+		commands := [][]string{}
+		if len(checkout) > 0 {
+			commands = append(commands, checkout)
 		}
+		commands = append(commands, []string{"git", "-C", mergeDir, "merge", branch, "--no-ff", "-m", fmt.Sprintf("maia: %s", description)})
 
 		for _, c := range commands {
 			mergeCmd := exec.Command(c[0], c[1:]...)
@@ -100,12 +161,43 @@ This is a destructive operation — commit all changes before merging.`,
 		}
 
 		fmt.Println("\n✓ Changes merged to", mainBranch)
-		fmt.Printf("  Run 'maia cleanup %s' to remove the worktree\n", filepath.Base(worktreePath))
+		if worktreePath != "" {
+			fmt.Printf("  Run 'maia cleanup %s' to remove the worktree\n", filepath.Base(worktreePath))
+		}
 
 		return nil
 	},
 }
 
 func init() {
+	mergeCmd.Flags().StringVar(&mergeBaseBranch, "base", "", "Branch to merge the change request into")
 	rootCmd.AddCommand(mergeCmd)
+}
+
+func worktreeForBranch(repo, branch string) string {
+	out, err := exec.Command("git", "-C", repo, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return ""
+	}
+	path := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			path = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch refs/heads/") && strings.TrimPrefix(line, "branch refs/heads/") == branch {
+			return path
+		}
+	}
+	return ""
+}
+
+func repositoryDefaultBranch(repo string) string {
+	if out, err := exec.Command("git", "-C", repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		return strings.TrimPrefix(strings.TrimSpace(string(out)), "origin/")
+	}
+	for _, branch := range []string{"main", "master"} {
+		if err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
+			return branch
+		}
+	}
+	return ""
 }

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/sceptyre/maia/internal/state"
@@ -11,50 +10,40 @@ import (
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List maia worktrees for current repo",
-	Long:  `List all maia worktrees for the current repository.`,
+	Short: "List change requests for the current repository",
+	Long:  `List all durable change requests and whether each has a materialized worktree.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		repoDir, err := state.GetRepoWorktreeDir()
+		repoRoot, err := state.RepositoryForWorktree(".")
 		if err != nil {
 			return err
 		}
-
-		worktrees, err := state.ListWorktrees()
+		changes, err := state.SyncChangeRequests(repoRoot)
 		if err != nil {
 			return err
 		}
-
-		repoName, _ := state.GetRepoName()
-		fmt.Printf("Worktrees for %s:\n", repoName)
-		fmt.Printf("Location: %s\n\n", repoDir)
-
-		if len(worktrees) == 0 {
-			fmt.Println("  No active worktrees. Create one with 'maia new <description>'")
+		repoDir := state.RepoWorktreeDirFor(repoRoot)
+		fmt.Printf("Change requests for %s:\n", filepath.Base(repoRoot))
+		fmt.Printf("Worktrees: %s\n\n", repoDir)
+		if len(changes) == 0 {
+			fmt.Println("  No change requests. Create one with 'maia new <description>'.")
 			return nil
 		}
-
-		for _, wt := range worktrees {
-			path := filepath.Join(repoDir, wt)
-
-			// Check if .maia exists
-			maiaPath := filepath.Join(path, state.StateDir)
-			hasMaia := false
-			if _, err := os.Stat(maiaPath); err == nil {
-				hasMaia = true
+		materialized := 0
+		for _, cr := range changes {
+			stateLabel := "[no worktree]"
+			if cr.Worktree != nil {
+				stateLabel = "[worktree]"
+				materialized++
 			}
-
-			status := ""
-			if !hasMaia {
-				status = " [no .maia]"
+			fmt.Printf("  %s — %s %s\n", cr.Slug, cr.Description, stateLabel)
+			fmt.Printf("    status: %s · source: %s\n", cr.Status, cr.SourceBranch)
+			if cr.Worktree != nil {
+				fmt.Printf("    %s\n", cr.Worktree.Path)
+			} else {
+				fmt.Printf("    restore with: maia materialize %s\n", cr.Slug)
 			}
-
-			fmt.Printf("  %s%s\n", wt, status)
-			fmt.Printf("    %s\n", path)
 		}
-
-		fmt.Println()
-		fmt.Printf("Total: %d worktree(s)\n", len(worktrees))
-
+		fmt.Printf("\nTotal: %d change request(s), %d materialized worktree(s)\n", len(changes), materialized)
 		return nil
 	},
 }

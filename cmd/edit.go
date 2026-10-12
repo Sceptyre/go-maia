@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/term"
 	"github.com/sceptyre/maia/internal/state"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var editCmd = &cobra.Command{
@@ -34,34 +34,89 @@ Examples:
   echo "New description" | maia edit my-slug  # Pipe content in`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var changePath string
-
 		if len(args) > 0 {
-			// Slug provided — resolve from parent repo
+			repoRoot, err := state.RepositoryForWorktree(".")
+			if err == nil {
+				if _, err := state.SyncChangeRequests(repoRoot); err != nil {
+					return err
+				}
+				if cr, found, err := state.GetChangeRequest(repoRoot, args[0]); err != nil {
+					return err
+				} else if found {
+					if cr.Worktree == nil {
+						return editDetachedChange(repoRoot, cr)
+					}
+					return editMaterializedChange(repoRoot, cr.Worktree.Path)
+				}
+			}
 			resolved, err := state.ValidateWorktreeExists(args[0])
 			if err != nil {
 				return err
 			}
-			changePath = filepath.Join(resolved, state.StateDir, "change.md")
-		} else {
-			// No slug — assume CWD is a worktree
-			if !state.HasWorktree() {
-				return fmt.Errorf("not in a maia worktree. Provide a slug: maia edit <slug>")
-			}
-			changePath = filepath.Join(state.StateDir, "change.md")
+			return editMaterializedChange("", resolved)
 		}
-
-		// Ensure the file exists
-		if _, err := os.Stat(changePath); os.IsNotExist(err) {
-			return fmt.Errorf("change.md not found at %s", changePath)
+		if !state.HasWorktree() {
+			return fmt.Errorf("not in a maia worktree. Provide a slug: maia edit <slug>")
 		}
-
-		// Detect if stdin is a terminal
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			return editWithEditor(changePath)
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
 		}
-		return editWithStdin(changePath)
+		repoRoot, err := state.RepositoryForWorktree(cwd)
+		if err != nil {
+			return err
+		}
+		return editMaterializedChange(repoRoot, cwd)
 	},
+}
+
+func editMaterializedChange(repoRoot, worktreePath string) error {
+	changePath := filepath.Join(worktreePath, state.StateDir, "change.md")
+	if _, err := os.Stat(changePath); err != nil {
+		return fmt.Errorf("change.md not found at %s", changePath)
+	}
+	var err error
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		err = editWithEditor(changePath)
+	} else {
+		err = editWithStdin(changePath)
+	}
+	if err != nil {
+		return err
+	}
+	if repoRoot != "" {
+		_, err = state.SyncChangeRequests(repoRoot)
+	}
+	return err
+}
+
+func editDetachedChange(repoRoot string, cr *state.ChangeRequest) error {
+	file, err := os.CreateTemp("", "maia-change-*.md")
+	if err != nil {
+		return err
+	}
+	path := file.Name()
+	defer os.Remove(path)
+	if _, err := file.WriteString(cr.Change); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		err = editWithEditor(path)
+	} else {
+		err = editWithStdin(path)
+	}
+	if err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return state.UpdateChangeDocument(repoRoot, cr.Slug, string(contents))
 }
 
 // editWithEditor opens the user's $EDITOR with the file.

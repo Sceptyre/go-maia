@@ -2,7 +2,9 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -55,6 +57,52 @@ func GetMainDir() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// EnsureLocalExclude appends the given patterns to the repository's local
+// exclude file ($GIT_COMMON_DIR/info/exclude), which git shares across every
+// worktree of the repo and never commits or pushes. Idempotent.
+func EnsureLocalExclude(worktreeDir string, patterns ...string) error {
+	out, err := exec.Command("git", "-C", worktreeDir, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return fmt.Errorf("resolve git common dir: %w", err)
+	}
+	common := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(worktreeDir, common)
+	}
+	path := filepath.Join(common, "info", "exclude")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(existing), "\n") {
+		have[strings.TrimSpace(line)] = true
+	}
+	var add []string
+	for _, pat := range patterns {
+		if pat != "" && !have[pat] {
+			add = append(add, pat)
+		}
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	prefix := ""
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		prefix = "\n"
+	}
+	_, err = f.WriteString(prefix + strings.Join(add, "\n") + "\n")
+	return err
 }
 
 func parseWorktreeList(output string) []Worktree {

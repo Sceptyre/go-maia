@@ -12,12 +12,16 @@ import (
 // Config represents the maia configuration
 type Config struct {
 	// LLM settings
-	OpenAIAPIKey  string `json:"openai_api_key"`
-	OpenAIBaseURL string `json:"openai_base_url"`
-	Model         string `json:"model"`
+	OpenAIAPIKey  string            `json:"openai_api_key"`
+	OpenAIBaseURL string            `json:"openai_base_url"`
+	OpenAIHeaders map[string]string `json:"openai_headers,omitempty"`
+	Model         string            `json:"model"`
 
 	// Web search
 	BraveAPIKey string `json:"brave_api_key"`
+
+	// GitHub integration (optional; gh CLI / env tokens are preferred)
+	GithubToken string `json:"github_token,omitempty"`
 
 	// MaxTokens limits the number of tokens in LLM responses. Defaults to 16384 if unset.
 	MaxTokens int `json:"max_tokens,omitempty"`
@@ -81,6 +85,8 @@ func Get(key string) string {
 		value = config.Model
 	case "brave_api_key":
 		value = config.BraveAPIKey
+	case "github_token":
+		value = config.GithubToken
 	case "max_tokens":
 		if config.MaxTokens > 0 {
 			value = fmt.Sprintf("%d", config.MaxTokens)
@@ -172,6 +178,8 @@ func envName(key string) string {
 		return "MAIA_MODEL"
 	case "brave_api_key":
 		return "BRAVE_API_KEY"
+	case "github_token":
+		return "GITHUB_TOKEN"
 	case "max_tokens":
 		return "MAIA_MAX_TOKENS"
 	}
